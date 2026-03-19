@@ -794,7 +794,7 @@ function renderHTML(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>renderBlock(b)).join('')
   const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,state:page.state,routes:allPages.map(p=>p.route),queries:page.queries}):''
-  const hydrate=needsJS?`<script>window.__FLUX_PAGE__=${config};</script><script src="/aiplang-hydrate.js" defer></script>`:''
+  const hydrate=needsJS?`<script>window.__AIPLANG_PAGE__=${config};</script><script src="/aiplang-hydrate.js" defer></script>`:''
   const themeCSS=page.themeVars?genThemeCSS(page.themeVars):''
   const customCSS=page.customTheme?`body{background:${page.customTheme.bg};color:${page.customTheme.text}}.fx-cta,.fx-btn{background:${page.customTheme.accent};color:#fff}`  :''
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${page.id}</title><style>${baseCSS(page.theme)}${customCSS}${themeCSS}</style></head><body>${body}${hydrate}</body></html>`
@@ -854,8 +854,8 @@ function baseCSS(theme) {
 // ═══════════════════════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════════════════════
-async function startServer(fluxFile, port = 3000) {
-  const src = fs.readFileSync(fluxFile, 'utf8')
+async function startServer(aipFile, port = 3000) {
+  const src = fs.readFileSync(aipFile, 'utf8')
   const app = parseApp(src)
   const srv = new AiplangServer()
 
@@ -911,7 +911,7 @@ async function startServer(fluxFile, port = 3000) {
 
   // Static assets
   srv.addRoute('GET', '/aiplang-hydrate.js', (req, res) => {
-    const p = path.join(__dirname, '..', 'flux-lang', 'runtime', 'aiplang-hydrate.js')
+    const p = path.join(__dirname, '..', 'runtime', 'aiplang-hydrate.js')
     if (fs.existsSync(p)) { res.writeHead(200,{'Content-Type':'application/javascript'}); res.end(fs.readFileSync(p)) }
     else { res.writeHead(404); res.end('// not found') }
   })

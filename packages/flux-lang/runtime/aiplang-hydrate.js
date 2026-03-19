@@ -6,7 +6,7 @@
 (function () {
 'use strict'
 
-const cfg = window.__FLUX_PAGE__
+const cfg = window.__AIPLANG_PAGE__
 if (!cfg) return
 
 // ── State ────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.1.0'
+const VERSION     = '2.1.1'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -53,6 +53,7 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
 
   GitHub: https://github.com/isacamartin/aiplang
   npm:    https://npmjs.com/package/aiplang
+  Docs:   https://isacamartin.github.io/aiplang
   `)
   process.exit(0)
 }
@@ -213,7 +214,7 @@ if (cmd === 'start' || cmd === 'run') {
     process.exit(1)
   }
   const port = parseInt(process.env.PORT || args[1] || '3000')
-  const serverPath = path.join(__dirname, '..', '..', 'aiplang-server', 'server.js')
+  const serverPath = path.join(__dirname, '..', 'server', 'server.js')
   if (!fs.existsSync(serverPath)) {
     console.error(`\n  ✗  Full-stack server not found.`)
     console.error(`  Install: npm install -g aiplang-server\n`)
@@ -400,7 +401,7 @@ function renderPage(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','list','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>applyMods(renderBlock(b,page),b)).join('')
   const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,routes:allPages.map(p=>p.route),state:page.state,queries:page.queries}):''
-  const hydrate=needsJS?`\n<script>window.__FLUX_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
+  const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
   const themeVarCSS=page.themeVars?genThemeVarCSS(page.themeVars):''
   return `<!DOCTYPE html>

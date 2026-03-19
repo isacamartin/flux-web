@@ -1,6 +1,6 @@
 {
   "name": "aiplang",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "AI-first full-stack language. Frontend + Backend + DB + Auth in one file. Competes with Laravel.",
   "keywords": [
     "aiplang",

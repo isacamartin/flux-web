@@ -285,7 +285,7 @@ function migrateModels(models) {
 // PARSER
 // ═══════════════════════════════════════════════════════════════════
 function parseApp(src) {
-  const app = { env:[], db:null, auth:null, mail:null, middleware:[], models:[], apis:[], pages:[], jobs:[], events:[], admin:null }
+  const app = { env:[], db:null, auth:null, mail:null, stripe:null, middleware:[], models:[], apis:[], pages:[], jobs:[], events:[], admin:null }
   const lines = src.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'))
   let i=0, inModel=false, inAPI=false, curModel=null, curAPI=null, pageLines=[], inPage=false
 
@@ -304,6 +304,8 @@ function parseApp(src) {
     if (line.startsWith('~mail '))        { app.mail = parseMailLine(line.slice(6)); i++; continue }
     if (line.startsWith('~middleware '))  { app.middleware = line.slice(12).split('|').map(s=>s.trim()); i++; continue }
     if (line.startsWith('~admin'))        { app.admin = parseAdminLine(line); i++; continue }
+    if (line.startsWith('~stripe '))       { app.stripe = parseStripeLine(line.slice(8)); i++; continue }
+    if (line.startsWith('~plan '))         { app.stripe = app.stripe || {}; app.stripe.plans = app.stripe.plans || {}; parsePlanLine(line.slice(6), app.stripe.plans); i++; continue }
     if (line.startsWith('~job '))         { app.jobs.push(parseJobLine(line.slice(5))); i++; continue }
     if (line.startsWith('~on '))          { app.events.push(parseEventLine(line.slice(4))); i++; continue }
 
@@ -343,6 +345,23 @@ function parseEnvLine(s) { const p=s.split(/\s+/); const ev={name:'',required:fa
 function parseDBLine(s) { const p=s.split(/\s+/); return{driver:p[0]||'sqlite',dsn:p[1]||'./app.db'} }
 function parseAuthLine(s) { const p=s.split(/\s+/); const a={provider:'jwt',secret:p[1]||'$JWT_SECRET',expire:'7d'}; for(const x of p){if(x.startsWith('expire='))a.expire=x.slice(7);if(x==='google')a.oauth=['google'];if(x==='github')a.oauth=[...(a.oauth||[]),'google']}; return a }
 function parseMailLine(s) { const parts=s.split(/\s+/); const m={driver:parts[0]||'smtp'}; for(const x of parts.slice(1)){const[k,v]=x.split('='); m[k]=v}; return m }
+function parseStripeLine(s) {
+  const parts = s.split(/\s+/)
+  const cfg = { key: parts[0] || '$STRIPE_SECRET_KEY', plans: {}, mode: 'subscription' }
+  for (const p of parts.slice(1)) {
+    if (p.startsWith('webhook=')) cfg.webhookSecret = p.slice(8)
+    if (p.startsWith('success=')) cfg.successUrl = p.slice(8)
+    if (p.startsWith('cancel='))  cfg.cancelUrl = p.slice(7)
+    if (p === 'payment')          cfg.mode = 'payment'
+  }
+  return cfg
+}
+function parsePlanLine(s, plans) {
+  // ~plan starter=price_xxx pro=price_yyy enterprise=price_zzz
+  s.split(/\s+/).forEach(pair => {
+    const eq = pair.indexOf('='); if (eq !== -1) plans[pair.slice(0,eq)] = pair.slice(eq+1)
+  })
+}
 function parseAdminLine(s) { const m=s.match(/~admin\s+(\S+)/); return{prefix:m?.[1]||'/admin',guard:'admin'} }
 function parseJobLine(s) { const[name,...rest]=s.split(/\s+/); return{name,action:rest.join(' ')} }
 function parseEventLine(s) { const m=s.match(/^(\S+)\s*=>\s*(.+)$/); return{event:m?.[1],action:m?.[2]} }
@@ -383,6 +402,13 @@ function compileRoute(route, server) {
     for (const guard of route.guards) {
       if (guard === 'auth' && !req.user)                            { res.error(401, 'Unauthorized'); return }
       if (guard === 'admin' && req.user?.role !== 'admin')          { res.error(403, 'Forbidden'); return }
+      if (guard === 'subscribed') {
+        const activeStatuses = ['active', 'trialing']
+        if (!req.user || (!activeStatuses.includes(req.user.subscription_status) && req.user.plan === 'free')) {
+          res.error(402, 'Active subscription required')
+          return
+        }
+      }
       if (guard === 'owner') {
         if (!req.user) { res.error(401, 'Unauthorized'); return }
         // owner check happens in ops
@@ -768,7 +794,7 @@ function renderHTML(page, allPages) {
   const needsJS=page.queries.length>0||page.blocks.some(b=>['table','form','if','btn','select','faq'].includes(b.kind))
   const body=page.blocks.map(b=>renderBlock(b)).join('')
   const config=needsJS?JSON.stringify({id:page.id,theme:page.theme,state:page.state,routes:allPages.map(p=>p.route),queries:page.queries}):''
-  const hydrate=needsJS?`<script>window.__FLUX_PAGE__=${config};</script><script src="/aiplang-hydrate.js" defer></script>`:''
+  const hydrate=needsJS?`<script>window.__AIPLANG_PAGE__=${config};</script><script src="/aiplang-hydrate.js" defer></script>`:''
   const themeCSS=page.themeVars?genThemeCSS(page.themeVars):''
   const customCSS=page.customTheme?`body{background:${page.customTheme.bg};color:${page.customTheme.text}}.fx-cta,.fx-btn{background:${page.customTheme.accent};color:#fff}`  :''
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${page.id}</title><style>${baseCSS(page.theme)}${customCSS}${themeCSS}</style></head><body>${body}${hydrate}</body></html>`
@@ -828,8 +854,8 @@ function baseCSS(theme) {
 // ═══════════════════════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════════════════════
-async function startServer(fluxFile, port = 3000) {
-  const src = fs.readFileSync(fluxFile, 'utf8')
+async function startServer(aipFile, port = 3000) {
+  const src = fs.readFileSync(aipFile, 'utf8')
   const app = parseApp(src)
   const srv = new AiplangServer()
 
@@ -866,6 +892,14 @@ async function startServer(fluxFile, port = 3000) {
   // Admin panel
   if (app.admin) registerAdminPanel(srv, app.admin, app.models)
 
+  // Stripe
+  if (app.stripe) {
+    setupStripe(app.stripe)
+    registerStripeRoutes(srv, app.stripe)
+    // Add subscription guard to compileRoute
+    STRIPE_PLANS = app.stripe.plans || {}
+  }
+
   // Frontend
   for (const page of app.pages) {
     srv.addRoute('GET', page.route, (req, res) => {
@@ -877,7 +911,7 @@ async function startServer(fluxFile, port = 3000) {
 
   // Static assets
   srv.addRoute('GET', '/aiplang-hydrate.js', (req, res) => {
-    const p = path.join(__dirname, '..', 'flux-lang', 'runtime', 'aiplang-hydrate.js')
+    const p = path.join(__dirname, '..', 'runtime', 'aiplang-hydrate.js')
     if (fs.existsSync(p)) { res.writeHead(200,{'Content-Type':'application/javascript'}); res.end(fs.readFileSync(p)) }
     else { res.writeHead(404); res.end('// not found') }
   })
@@ -901,3 +935,300 @@ if (require.main === module) {
   if (!f) { console.error('Usage: node server.js <app.flux> [port]'); process.exit(1) }
   startServer(f, p).catch(e=>{console.error(e);process.exit(1)})
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// STRIPE — Payments, Subscriptions, Webhooks
+// ═══════════════════════════════════════════════════════════════════
+
+let STRIPE = null
+let STRIPE_CONFIG = null
+let STRIPE_PLANS = {}
+
+function setupStripe(config) {
+  STRIPE_CONFIG = config
+  const key = resolveEnv(config.key) || ''
+  // Use mock if key is placeholder, test/mock value, or SDK unavailable
+  const isMock = !key || key.startsWith('$') || key === 'sk_test_mock' || key.includes('mock')
+  if (isMock) {
+    console.log('[aiplang] Stripe: mock mode (set STRIPE_SECRET_KEY for real payments)')
+    STRIPE = null // will use mockStripe()
+    return
+  }
+  try {
+    const Stripe = require('stripe')
+    STRIPE = new Stripe(key, { apiVersion: '2024-06-20' })
+    console.log(`[aiplang] Stripe: live mode (${key.startsWith('sk_test') ? 'test key' : 'production key'})`)
+  } catch (e) {
+    console.log('[aiplang] Stripe: SDK error, using mock')
+    STRIPE = null
+  }
+}
+
+function mockStripe() {
+  // Mock Stripe for dev/test without real key
+  return {
+    customers: {
+      create: async (opts) => ({ id: 'cus_mock_' + uuid(), email: opts.email }),
+      retrieve: async (id) => ({ id, email: 'mock@test.com' })
+    },
+    checkout: {
+      sessions: {
+        create: async (opts) => ({
+          id: 'cs_mock_' + uuid(),
+          url: opts.success_url + '?session_id=mock',
+          payment_status: 'unpaid'
+        })
+      }
+    },
+    subscriptions: {
+      retrieve: async (id) => ({
+        id, status: 'active',
+        current_period_end: Math.floor(Date.now()/1000) + 86400*30,
+        items: { data: [{ price: { id: 'price_mock', nickname: 'Pro' } }] }
+      }),
+      cancel: async (id) => ({ id, status: 'canceled' })
+    },
+    billingPortal: {
+      sessions: {
+        create: async (opts) => ({ url: opts.return_url + '?portal=mock' })
+      }
+    },
+    webhooks: {
+      constructEvent: (body, sig, secret) => {
+        try { return JSON.parse(body) } catch { throw new Error('Invalid payload') }
+      }
+    },
+    prices: {
+      list: async () => ({ data: [] })
+    }
+  }
+}
+
+function getStripe() { return STRIPE || mockStripe() }
+
+function registerStripeRoutes(server, stripeConfig) {
+  const stripe = getStripe()
+  const plans = stripeConfig.plans || {}
+  const webhookSecret = resolveEnv(stripeConfig.webhookSecret || '$STRIPE_WEBHOOK_SECRET')
+  const successUrl = stripeConfig.successUrl || `${process.env.APP_URL || 'http://localhost:3000'}/dashboard?payment=success`
+  const cancelUrl  = stripeConfig.cancelUrl  || `${process.env.APP_URL || 'http://localhost:3000'}/pricing?payment=cancelled`
+
+  // ── POST /api/stripe/checkout ──────────────────────────────────
+  // Creates a Stripe Checkout session
+  // Body: { plan: 'pro', email: '...' } or uses logged-in user
+  server.addRoute('POST', '/api/stripe/checkout', async (req, res) => {
+    try {
+      const plan = req.body.plan || req.body.price_id || Object.keys(plans)[0]
+      const priceId = plans[plan] || plan // allow passing price_id directly
+      const email = req.body.email || req.user?.email
+
+      if (!priceId) { res.error(400, 'Plan not found. Available: ' + Object.keys(plans).join(', ')); return }
+
+      // Get or create Stripe customer
+      let customerId = null
+      if (req.user?.id) {
+        const userModel = Object.values(server.models).find(m => m.tableName === 'users')
+        if (userModel) {
+          const user = userModel.find(req.user.id)
+          if (user?.stripe_customer_id) {
+            customerId = user.stripe_customer_id
+          } else {
+            const customer = await stripe.customers.create({ email, metadata: { user_id: req.user.id } })
+            customerId = customer.id
+            if (userModel.find(req.user.id)) userModel.update(req.user.id, { stripe_customer_id: customerId })
+          }
+        }
+      }
+
+      const sessionOpts = {
+        mode: stripeConfig.mode === 'payment' ? 'payment' : 'subscription',
+        line_items: [{ price: priceId, quantity: 1 }],
+        success_url: successUrl + (successUrl.includes('?') ? '&' : '?') + 'session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: cancelUrl,
+        allow_promotion_codes: true,
+      }
+      if (customerId)    sessionOpts.customer = customerId
+      else if (email)    sessionOpts.customer_email = email
+      if (req.body.trial_days) sessionOpts.subscription_data = { trial_period_days: parseInt(req.body.trial_days) }
+      if (req.user?.id)  sessionOpts.metadata = { user_id: req.user.id, plan }
+
+      const session = await stripe.checkout.sessions.create(sessionOpts)
+      res.json(200, { url: session.url, session_id: session.id })
+    } catch (e) {
+      console.error('[aiplang:stripe] Checkout error:', e.message)
+      res.error(500, e.message)
+    }
+  })
+
+  // ── POST /api/stripe/portal ────────────────────────────────────
+  // Customer billing portal (manage subscription, invoices, card)
+  server.addRoute('POST', '/api/stripe/portal', async (req, res) => {
+    if (!req.user) { res.error(401, 'Unauthorized'); return }
+    try {
+      const userModel = Object.values(server.models).find(m => m.tableName === 'users')
+      const user = userModel?.find(req.user.id)
+      if (!user?.stripe_customer_id) { res.error(404, 'No billing account found'); return }
+
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripe_customer_id,
+        return_url: cancelUrl
+      })
+      res.json(200, { url: session.url })
+    } catch (e) {
+      res.error(500, e.message)
+    }
+  })
+
+  // ── GET /api/stripe/subscription ──────────────────────────────
+  // Get current user's subscription status
+  server.addRoute('GET', '/api/stripe/subscription', async (req, res) => {
+    if (!req.user) { res.error(401, 'Unauthorized'); return }
+    try {
+      const userModel = Object.values(server.models).find(m => m.tableName === 'users')
+      const user = userModel?.find(req.user.id)
+      res.json(200, {
+        plan: user?.plan || 'free',
+        status: user?.subscription_status || 'inactive',
+        customer_id: user?.stripe_customer_id || null,
+        period_end: user?.subscription_period_end || null
+      })
+    } catch (e) { res.error(500, e.message) }
+  })
+
+  // ── DELETE /api/stripe/subscription ───────────────────────────
+  // Cancel subscription
+  server.addRoute('DELETE', '/api/stripe/subscription', async (req, res) => {
+    if (!req.user) { res.error(401, 'Unauthorized'); return }
+    try {
+      const userModel = Object.values(server.models).find(m => m.tableName === 'users')
+      const user = userModel?.find(req.user.id)
+      if (!user?.subscription_id) { res.error(404, 'No active subscription'); return }
+      await stripe.subscriptions.cancel(user.subscription_id)
+      userModel?.update(req.user.id, { subscription_status: 'canceled', plan: 'free' })
+      res.json(200, { status: 'canceled' })
+    } catch (e) { res.error(500, e.message) }
+  })
+
+  // ── POST /api/stripe/webhook ───────────────────────────────────
+  // Stripe webhook handler — updates user subscription state
+  server.addRoute('POST', '/api/stripe/webhook', async (req, res) => {
+    let event
+    try {
+      const rawBody = await getRawBody(req)
+      const sig = req.headers['stripe-signature']
+      if (webhookSecret && sig) {
+        event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret)
+      } else {
+        event = JSON.parse(rawBody)
+      }
+    } catch (e) {
+      res.error(400, 'Webhook error: ' + e.message); return
+    }
+
+    const userModel = Object.values(server.models).find(m => m.tableName === 'users')
+    const data = event.data?.object
+
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const userId = data.metadata?.user_id
+        if (userId && userModel) {
+          const planName = data.metadata?.plan || 'pro'
+          userModel.update(userId, {
+            plan: planName,
+            subscription_status: 'active',
+            stripe_customer_id: data.customer || undefined,
+            subscription_id: data.subscription || undefined,
+          })
+          emit('stripe.checkout.completed', { userId, plan: planName, session: data.id })
+        }
+        break
+      }
+      case 'customer.subscription.updated': {
+        const custId = data.customer
+        if (custId && userModel) {
+          const user = userModel.findBy('stripe_customer_id', custId)
+          if (user) {
+            const planItem = data.items?.data?.[0]?.price
+            const planName = resolvePlanFromPrice(planItem?.id, plans)
+            userModel.update(user.id, {
+              subscription_status: data.status,
+              plan: planName || user.plan,
+              subscription_period_end: data.current_period_end
+                ? new Date(data.current_period_end * 1000).toISOString() : undefined
+            })
+            emit('stripe.subscription.updated', { userId: user.id, status: data.status })
+          }
+        }
+        break
+      }
+      case 'customer.subscription.deleted': {
+        const custId = data.customer
+        if (custId && userModel) {
+          const user = userModel.findBy('stripe_customer_id', custId)
+          if (user) {
+            userModel.update(user.id, { subscription_status: 'canceled', plan: 'free' })
+            emit('stripe.subscription.canceled', { userId: user.id })
+          }
+        }
+        break
+      }
+      case 'invoice.payment_failed': {
+        const custId = data.customer
+        if (custId && userModel) {
+          const user = userModel.findBy('stripe_customer_id', custId)
+          if (user) {
+            userModel.update(user.id, { subscription_status: 'past_due' })
+            emit('stripe.payment.failed', { userId: user.id, amount: data.amount_due })
+          }
+        }
+        break
+      }
+      case 'invoice.payment_succeeded': {
+        const custId = data.customer
+        if (custId && userModel) {
+          const user = userModel.findBy('stripe_customer_id', custId)
+          if (user && user.subscription_status === 'past_due') {
+            userModel.update(user.id, { subscription_status: 'active' })
+          }
+          emit('stripe.payment.succeeded', { userId: user?.id, amount: data.amount_paid })
+        }
+        break
+      }
+    }
+
+    res.json(200, { received: true, type: event.type })
+  })
+
+  console.log(`[aiplang] Stripe: /api/stripe/checkout | /api/stripe/portal | /api/stripe/webhook`)
+  console.log(`[aiplang] Stripe: Plans: ${Object.keys(plans).join(', ') || 'none defined'}`)
+}
+
+// ── Guard: ~guard subscription ────────────────────────────────────
+// Check if user has active subscription
+function checkSubscription(req, plan = null) {
+  if (!req.user) return false
+  const userModel = Object.values({}).find(m => m.tableName === 'users')
+  // Simplified: check from JWT claims if we embed subscription_status
+  if (req.user.subscription_status === 'active') return true
+  if (req.user.plan && req.user.plan !== 'free') return true
+  return false
+}
+
+function resolvePlanFromPrice(priceId, plans) {
+  for (const [name, id] of Object.entries(plans)) {
+    if (id === priceId) return name
+  }
+  return null
+}
+
+async function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    req.on('data', chunk => data += chunk)
+    req.on('end', () => resolve(data))
+    req.on('error', reject)
+  })
+}
+
+module.exports.setupStripe = setupStripe
+module.exports.registerStripeRoutes = registerStripeRoutes
