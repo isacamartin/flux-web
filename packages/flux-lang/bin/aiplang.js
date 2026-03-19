@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.3.0'
+const VERSION     = '2.4.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -36,7 +36,7 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
   Usage:
     npx aiplang init [name]                  create project (default template)
     npx aiplang init [name] --template <t>   use template: saas|landing|crud|dashboard|portfolio|blog
-    npx aiplang init [name] --template ./my.flux     use a local .flux file as template
+    npx aiplang init [name] --template ./my.aiplang     use a local .aiplang file as template
     npx aiplang init [name] --template my-custom     use a saved custom template
     npx aiplang serve [dir]                  dev server + hot reload
     npx aiplang build [dir/file]             compile → static HTML
@@ -44,16 +44,16 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
     npx aiplang --version
 
   Full-stack:
-    npx aiplang start app.flux           start full-stack server (API + DB + frontend)
-    PORT=8080 aiplang start app.flux     custom port
+    npx aiplang start app.aiplang           start full-stack server (API + DB + frontend)
+    PORT=8080 aiplang start app.aiplang     custom port
 
   Templates:
     npx aiplang template list                list all templates (built-in + custom)
     npx aiplang template save <n>            save current project as template
-    npx aiplang template save <n> --from <f> save a specific .flux file as template
+    npx aiplang template save <n> --from <f> save a specific .aiplang file as template
     npx aiplang template edit <n>            open template in editor
     npx aiplang template show <n>            print template source
-    npx aiplang template export <n>          export template to .flux file
+    npx aiplang template export <n>          export template to .aiplang file
     npx aiplang template remove <n>          delete a custom template
 
   Custom template variables:
@@ -76,7 +76,7 @@ if (cmd==='--version'||cmd==='-v') { console.log(`aiplang v${VERSION}`); process
 
 // ─────────────────────────────────────────────────────────────────
 // TEMPLATE SYSTEM
-// Custom templates stored at ~/.aiplang/templates/<name>.flux
+// Custom templates stored at ~/.aiplang/templates/<name>.aiplang
 // ─────────────────────────────────────────────────────────────────
 
 const TEMPLATES_DIR = path.join(require('os').homedir(), '.aiplang', 'templates')
@@ -220,7 +220,7 @@ foot{{{name}}}`,
   default: `# {{name}}
 %home dark /
 nav{{{name}}>/login:Sign in}
-hero{Welcome to {{name}}|Edit pages/home.flux to get started.>/signup:Get started} animate:fade-up
+hero{Welcome to {{name}}|Edit pages/home.aiplang to get started.>/signup:Get started} animate:fade-up
 row3{rocket>Fast>Renders in under 1ms.|bolt>AI-native>Written by Claude in seconds.|globe>Deploy anywhere>Static files. Any host.}
 foot{© {{year}} {{name}}}`,
 }
@@ -232,15 +232,15 @@ function applyTemplateVars(src, name, year) {
 function getTemplate(tplName, name, year) {
   ensureTemplatesDir()
 
-  // 1. Local file path: --template ./my-template.flux or --template /abs/path.flux
+  // 1. Local file path: --template ./my-template.aiplang or --template /abs/path.aiplang
   if (tplName.startsWith('./') || tplName.startsWith('../') || tplName.startsWith('/')) {
     const full = path.resolve(tplName)
     if (!fs.existsSync(full)) { console.error(`\n  ✗  Template file not found: ${full}\n`); process.exit(1) }
     return applyTemplateVars(fs.readFileSync(full, 'utf8'), name, year)
   }
 
-  // 2. User custom template: ~/.aiplang/templates/<name>.flux
-  const customPath = path.join(TEMPLATES_DIR, tplName + '.flux')
+  // 2. User custom template: ~/.aiplang/templates/<name>.aiplang
+  const customPath = path.join(TEMPLATES_DIR, tplName + '.aiplang')
   if (fs.existsSync(customPath)) {
     return applyTemplateVars(fs.readFileSync(customPath, 'utf8'), name, year)
   }
@@ -251,7 +251,7 @@ function getTemplate(tplName, name, year) {
 
   // Not found — show what's available
   const customs = fs.existsSync(TEMPLATES_DIR)
-    ? fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.flux')).map(f=>f.replace('.flux',''))
+    ? fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.aiplang')).map(f=>f.replace('.aiplang',''))
     : []
   const all = [...Object.keys(BUILTIN_TEMPLATES).filter(k=>k!=='default'), ...customs]
   console.error(`\n  ✗  Template "${tplName}" not found.\n  Available: ${all.join(', ')}\n`)
@@ -261,7 +261,7 @@ function getTemplate(tplName, name, year) {
 function listTemplates() {
   ensureTemplatesDir()
   const builtins = Object.keys(BUILTIN_TEMPLATES).filter(k=>k!=='default')
-  const customs  = fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.flux')).map(f=>f.replace('.flux',''))
+  const customs  = fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.aiplang')).map(f=>f.replace('.aiplang',''))
   console.log(`\n  aiplang templates\n`)
   console.log(`  Built-in:`)
   builtins.forEach(t => console.log(`    ${t}`))
@@ -295,18 +295,18 @@ if (cmd === 'template') {
       if (!fs.existsSync(fp)) { console.error(`\n  ✗  File not found: ${fp}\n`); process.exit(1) }
       src = fs.readFileSync(fp, 'utf8')
     } else {
-      // Auto-detect: use pages/ directory or app.flux
-      const sources = ['pages', 'app.flux', 'index.flux']
+      // Auto-detect: use pages/ directory or app.aiplang
+      const sources = ['pages', 'app.aiplang', 'index.aiplang']
       const found = sources.find(s => fs.existsSync(s))
-      if (!found) { console.error('\n  ✗  No .flux files found. Use --from <file> to specify source.\n'); process.exit(1) }
+      if (!found) { console.error('\n  ✗  No .aiplang files found. Use --from <file> to specify source.\n'); process.exit(1) }
       if (fs.statSync(found).isDirectory()) {
-        src = fs.readdirSync(found).filter(f=>f.endsWith('.flux'))
+        src = fs.readdirSync(found).filter(f=>f.endsWith('.aiplang'))
           .map(f => fs.readFileSync(path.join(found,f),'utf8')).join('\n---\n')
       } else {
         src = fs.readFileSync(found, 'utf8')
       }
     }
-    const dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    const dest = path.join(TEMPLATES_DIR, tname + '.aiplang')
     fs.writeFileSync(dest, src)
     console.log(`\n  ✓  Template saved: ${tname}\n     ${dest}\n\n  Use it: aiplang init my-app --template ${tname}\n`)
     process.exit(0)
@@ -316,7 +316,7 @@ if (cmd === 'template') {
   if (sub === 'remove' || sub === 'rm' || sub === 'delete') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template remove <name>\n'); process.exit(1) }
-    const dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    const dest = path.join(TEMPLATES_DIR, tname + '.aiplang')
     if (!fs.existsSync(dest)) { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
     fs.unlinkSync(dest)
     console.log(`\n  ✓  Removed template: ${tname}\n`); process.exit(0)
@@ -326,7 +326,7 @@ if (cmd === 'template') {
   if (sub === 'edit' || sub === 'open') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template edit <name>\n'); process.exit(1) }
-    let dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    let dest = path.join(TEMPLATES_DIR, tname + '.aiplang')
     if (!fs.existsSync(dest)) {
       // create from built-in if exists
       const builtin = BUILTIN_TEMPLATES[tname]
@@ -342,7 +342,7 @@ if (cmd === 'template') {
   // aiplang template show <name>
   if (sub === 'show' || sub === 'cat') {
     const tname = args[1] || 'default'
-    const customPath = path.join(TEMPLATES_DIR, tname + '.flux')
+    const customPath = path.join(TEMPLATES_DIR, tname + '.aiplang')
     if (fs.existsSync(customPath)) { console.log(fs.readFileSync(customPath,'utf8')); process.exit(0) }
     const builtin = BUILTIN_TEMPLATES[tname]
     if (builtin) { console.log(builtin); process.exit(0) }
@@ -354,8 +354,8 @@ if (cmd === 'template') {
     const tname = args[1]
     if (!tname) { console.error('\n  ✗  Usage: aiplang template export <name>\n'); process.exit(1) }
     const outIdx = args.indexOf('--out')
-    const outFile = outIdx !== -1 ? args[outIdx+1] : `./${tname}.flux`
-    const customPath = path.join(TEMPLATES_DIR, tname + '.flux')
+    const outFile = outIdx !== -1 ? args[outIdx+1] : `./${tname}.aiplang`
+    const customPath = path.join(TEMPLATES_DIR, tname + '.aiplang')
     const src = fs.existsSync(customPath) ? fs.readFileSync(customPath,'utf8') : BUILTIN_TEMPLATES[tname]
     if (!src) { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
     fs.writeFileSync(outFile, src)
@@ -384,21 +384,21 @@ if (cmd==='init') {
   const isMultiFile = tplSrc.includes('\n---\n')
 
   if (isFullStack) {
-    // Full-stack project: single app.flux
+    // Full-stack project: single app.aiplang
     fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(path.join(dir, 'app.flux'), tplSrc)
+    fs.writeFileSync(path.join(dir, 'app.aiplang'), tplSrc)
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name, version:'0.1.0',
-      scripts: { dev: 'npx aiplang start app.flux', start: 'npx aiplang start app.flux' },
+      scripts: { dev: 'npx aiplang start app.aiplang', start: 'npx aiplang start app.aiplang' },
       devDependencies: { 'aiplang': `^${VERSION}` }
     }, null, 2))
     fs.writeFileSync(path.join(dir, '.env.example'), 'JWT_SECRET=change-me-in-production\n# STRIPE_SECRET_KEY=sk_test_...\n# AWS_ACCESS_KEY_ID=...\n# AWS_SECRET_ACCESS_KEY=...\n# S3_BUCKET=...\n')
     fs.writeFileSync(path.join(dir, '.gitignore'), '*.db\nnode_modules/\ndist/\n.env\nuploads/\n')
-    fs.writeFileSync(path.join(dir, 'README.md'), `# ${name}\n\nGenerated with [aiplang](https://npmjs.com/package/aiplang) v${VERSION}\n\n## Run\n\n\`\`\`bash\nnpx aiplang start app.flux\n\`\`\`\n`)
+    fs.writeFileSync(path.join(dir, 'README.md'), `# ${name}\n\nGenerated with [aiplang](https://npmjs.com/package/aiplang) v${VERSION}\n\n## Run\n\n\`\`\`bash\nnpx aiplang start app.aiplang\n\`\`\`\n`)
     const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
-    console.log(`\n  ✓  Created ${name}/${label}\n\n     app.flux  ← full-stack app (backend + frontend)\n\n  Next:\n     cd ${name} && npx aiplang start app.flux\n`)
+    console.log(`\n  ✓  Created ${name}/${label}\n\n     app.aiplang  ← full-stack app (backend + frontend)\n\n  Next:\n     cd ${name} && npx aiplang start app.aiplang\n`)
   } else if (isMultiFile) {
-    // Multi-page SSG project: pages/*.flux
+    // Multi-page SSG project: pages/*.aiplang
     fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
     fs.mkdirSync(path.join(dir,'public'), {recursive:true})
     for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
@@ -408,7 +408,7 @@ if (cmd==='init') {
     pageBlocks.forEach((block, i) => {
       const m = block.match(/^%([a-zA-Z0-9_-]+)/m)
       const pageName = m ? m[1] : (i === 0 ? 'home' : `page${i}`)
-      fs.writeFileSync(path.join(dir,'pages',`${pageName}.flux`), block.trim())
+      fs.writeFileSync(path.join(dir,'pages',`${pageName}.aiplang`), block.trim())
     })
     fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
     fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
@@ -422,11 +422,11 @@ if (cmd==='init') {
     for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
       const src=path.join(RUNTIME_DIR,f); if(fs.existsSync(src)) fs.copyFileSync(src,path.join(dir,'public',f))
     }
-    fs.writeFileSync(path.join(dir,'pages','home.flux'), tplSrc)
+    fs.writeFileSync(path.join(dir,'pages','home.aiplang'), tplSrc)
     fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
     fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
     const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
-    console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/home.flux  ← edit this\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
+    console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/home.aiplang  ← edit this\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
   }
   process.exit(0)
 }
@@ -435,7 +435,7 @@ if (cmd==='init') {
 if (cmd==='new') {
   const name=args[0]; if(!name){console.error('\n  ✗  Usage: aiplang new <page>\n');process.exit(1)}
   const dir=fs.existsSync('pages')?'pages':'.'
-  const file=path.join(dir,`${name}.flux`)
+  const file=path.join(dir,`${name}.aiplang`)
   if(fs.existsSync(file)){console.error(`\n  ✗  ${file} exists.\n`);process.exit(1)}
   const cap=name.charAt(0).toUpperCase()+name.slice(1)
   fs.writeFileSync(file,`# ${name}\n%${name} dark /${name}\n\nnav{AppName>/home:Home}\nhero{${cap}|Description.>/action:Get started}\nfoot{© ${new Date().getFullYear()} AppName}\n`)
@@ -450,9 +450,9 @@ if (cmd==='build') {
   const input=args.filter((a,i)=>!a.startsWith('--')&&i!==outIdx+1)[0]||'pages/'
   const files=[]
   if(fs.existsSync(input)&&fs.statSync(input).isDirectory()){
-    fs.readdirSync(input).filter(f=>f.endsWith('.flux')).forEach(f=>files.push(path.join(input,f)))
-  } else if(input.endsWith('.flux')&&fs.existsSync(input)){ files.push(input) }
-  if(!files.length){console.error(`\n  ✗  No .flux files in: ${input}\n`);process.exit(1)}
+    fs.readdirSync(input).filter(f=>f.endsWith('.aiplang')).forEach(f=>files.push(path.join(input,f)))
+  } else if(input.endsWith('.aiplang')&&fs.existsSync(input)){ files.push(input) }
+  if(!files.length){console.error(`\n  ✗  No .aiplang files in: ${input}\n`);process.exit(1)}
   const src=files.map(f=>fs.readFileSync(f,'utf8')).join('\n---\n')
   const pages=parseFlux(src)
   if(!pages.length){console.error('\n  ✗  No pages found.\n');process.exit(1)}
@@ -471,7 +471,7 @@ if (cmd==='build') {
   }
   const hf=path.join(RUNTIME_DIR,'aiplang-hydrate.js')
   if(fs.existsSync(hf)){const dst=path.join(outDir,'aiplang-hydrate.js');fs.copyFileSync(hf,dst);total+=fs.statSync(dst).size;console.log(`  ✓  ${dst.padEnd(40)} ${hSize(fs.statSync(dst).size)}`)}
-  if(fs.existsSync('public'))fs.readdirSync('public').filter(f=>!f.endsWith('.flux')).forEach(f=>fs.copyFileSync(path.join('public',f),path.join(outDir,f)))
+  if(fs.existsSync('public'))fs.readdirSync('public').filter(f=>!f.endsWith('.aiplang')).forEach(f=>fs.copyFileSync(path.join('public',f),path.join(outDir,f)))
   console.log(`\n  ${pages.length} page(s) — ${hSize(total)} total\n\n  Preview: npx serve ${outDir}\n  Deploy:  Vercel, Netlify, S3, any static host\n`)
   process.exit(0)
 }
@@ -480,13 +480,13 @@ if (cmd==='build') {
 if (cmd==='serve'||cmd==='dev') {
   const root=path.resolve(args[0]||'.')
   const port=parseInt(process.env.PORT||'3000')
-  const MIME={'.html':'text/html;charset=utf-8','.js':'application/javascript','.css':'text/css','.flux':'text/plain','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.ico':'image/x-icon'}
+  const MIME={'.html':'text/html;charset=utf-8','.js':'application/javascript','.css':'text/css','.aiplang':'text/plain','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.ico':'image/x-icon'}
   let clients=[]
   const mtimes={}
   setInterval(()=>{
     const pd=path.join(root,'pages')
     if(!fs.existsSync(pd))return
-    fs.readdirSync(pd).filter(f=>f.endsWith('.flux')).forEach(f=>{
+    fs.readdirSync(pd).filter(f=>f.endsWith('.aiplang')).forEach(f=>{
       const fp=path.join(pd,f),mt=fs.statSync(fp).mtimeMs
       if(mtimes[fp]&&mtimes[fp]!==mt)clients.forEach(c=>{try{c.write('data: reload\n\n')}catch{}})
       mtimes[fp]=mt
@@ -501,7 +501,7 @@ if (cmd==='serve'||cmd==='dev') {
     let p=req.url.split('?')[0];if(p==='/') p='/index.html'
     let fp=null
     for(const c of [path.join(root,'public',p),path.join(root,p)]){if(fs.existsSync(c)&&fs.statSync(c).isFile()){fp=c;break}}
-    if(!fp&&p.endsWith('.flux')){const c=path.join(root,'pages',path.basename(p));if(fs.existsSync(c))fp=c}
+    if(!fp&&p.endsWith('.aiplang')){const c=path.join(root,'pages',path.basename(p));if(fs.existsSync(c))fp=c}
     if(!fp){res.writeHead(404);res.end('Not found');return}
     let content=fs.readFileSync(fp)
     if(path.extname(fp)==='.html'){
@@ -510,7 +510,7 @@ if (cmd==='serve'||cmd==='dev') {
     }
     res.writeHead(200,{'Content-Type':MIME[path.extname(fp)]||'application/octet-stream','Access-Control-Allow-Origin':'*'})
     res.end(content)
-  }).listen(port,()=>console.log(`\n  ✓  aiplang dev server\n\n  →  http://localhost:${port}\n\n  Hot reload ON — edit .flux files and browser refreshes.\n  Ctrl+C to stop.\n`))
+  }).listen(port,()=>console.log(`\n  ✓  aiplang dev server\n\n  →  http://localhost:${port}\n\n  Hot reload ON — edit .aiplang files and browser refreshes.\n  Ctrl+C to stop.\n`))
   return
 }
 
@@ -518,7 +518,7 @@ if (cmd==='serve'||cmd==='dev') {
 if (cmd === 'start' || cmd === 'run') {
   const aipFile = args[0]
   if (!aipFile || !fs.existsSync(aipFile)) {
-    console.error(`\n  ✗  Usage: aiplang start <app.flux>\n`)
+    console.error(`\n  ✗  Usage: aiplang start <app.aiplang>\n`)
     process.exit(1)
   }
   const port = parseInt(process.env.PORT || args[1] || '3000')

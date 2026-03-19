@@ -330,9 +330,9 @@ aiplang serve        # dev → localhost:3000
 aiplang build pages/ # compile → dist/
 
 # Full-stack (Node.js backend)
-aiplang start app.flux
+aiplang start app.aiplang
 
 # Go binary (production, v2)
-aiplangd dev app.flux
-aiplangd build app.flux
+aiplangd dev app.aiplang
+aiplangd build app.aiplang
 ```
