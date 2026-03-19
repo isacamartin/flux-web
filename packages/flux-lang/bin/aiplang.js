@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.2.0'
+const VERSION     = '2.3.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -34,16 +34,31 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
   AI-first web language — full apps in ~20 lines.
 
   Usage:
-    npx aiplang init [name]                 create project
-    npx aiplang init --template saas|landing|crud
-    npx aiplang serve [dir]                 dev server + hot reload
-    npx aiplang build [dir/file]            compile → static HTML
-    npx aiplang new <page>                  new page template
+    npx aiplang init [name]                  create project (default template)
+    npx aiplang init [name] --template <t>   use template: saas|landing|crud|dashboard|portfolio|blog
+    npx aiplang init [name] --template ./my.flux     use a local .flux file as template
+    npx aiplang init [name] --template my-custom     use a saved custom template
+    npx aiplang serve [dir]                  dev server + hot reload
+    npx aiplang build [dir/file]             compile → static HTML
+    npx aiplang new <page>                   new page template
     npx aiplang --version
 
   Full-stack:
     npx aiplang start app.flux           start full-stack server (API + DB + frontend)
     PORT=8080 aiplang start app.flux     custom port
+
+  Templates:
+    npx aiplang template list                list all templates (built-in + custom)
+    npx aiplang template save <n>            save current project as template
+    npx aiplang template save <n> --from <f> save a specific .flux file as template
+    npx aiplang template edit <n>            open template in editor
+    npx aiplang template show <n>            print template source
+    npx aiplang template export <n>          export template to .flux file
+    npx aiplang template remove <n>          delete a custom template
+
+  Custom template variables:
+    {{name}}  project name
+    {{year}}  current year
 
   Customization:
     ~theme accent=#7c3aed radius=1.5rem font=Syne bg=#000 text=#fff
@@ -59,66 +74,360 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
 }
 if (cmd==='--version'||cmd==='-v') { console.log(`aiplang v${VERSION}`); process.exit(0) }
 
-// ── Templates ────────────────────────────────────────────────────
-const TEMPLATES = {
-  saas: (n,y) => `# ${n}
+// ─────────────────────────────────────────────────────────────────
+// TEMPLATE SYSTEM
+// Custom templates stored at ~/.aiplang/templates/<name>.flux
+// ─────────────────────────────────────────────────────────────────
+
+const TEMPLATES_DIR = path.join(require('os').homedir(), '.aiplang', 'templates')
+
+function ensureTemplatesDir() {
+  if (!fs.existsSync(TEMPLATES_DIR)) fs.mkdirSync(TEMPLATES_DIR, { recursive: true })
+}
+
+// Built-in templates (interpolate {{name}} and {{year}})
+const BUILTIN_TEMPLATES = {
+  saas: `# {{name}}
+~db sqlite ./app.db
+~auth jwt $JWT_SECRET expire=7d
+~admin /admin
+
+model User {
+  id       : uuid : pk auto
+  name     : text : required
+  email    : text : required unique
+  password : text : required hashed
+  plan     : enum : free,starter,pro : default=free
+  role     : enum : user,admin : default=user
+  ~soft-delete
+}
+
+api POST /api/auth/register {
+  ~validate name required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api GET /api/me {
+  ~guard auth
+  return $auth.user
+}
+
+api GET /api/stats {
+  return User.count()
+}
+
 %home dark /
 @stats = {}
 ~mount GET /api/stats => @stats
-nav{${n}>/features:Features>/pricing:Pricing>/login:Sign in}
-hero{Ship faster with AI|Zero config, infinite scale.>/signup:Start free>/demo:View demo} animate:fade-up
-stats{@stats.users:Users|@stats.mrr:MRR|@stats.uptime:Uptime}
-row3{rocket>Deploy instantly>Push to git, live in 3 seconds.|shield>Enterprise ready>SOC2, GDPR, SSO built-in.|chart>Full observability>Real-time errors and performance.} animate:stagger
-testimonial{Sarah Chen, CEO @ Acme|"Cut deployment time by 90%. Absolutely game-changing."|img:https://i.pravatar.cc/64?img=47}
-foot{© ${y} ${n}>/privacy:Privacy>/terms:Terms}`,
+nav{{{name}}>/pricing:Pricing>/login:Sign in}
+hero{Ship faster with AI|Zero config, infinite scale.>/signup:Start free>/demo:View demo} animate:blur-in
+stats{@stats:Users|99.9%:Uptime|$0:Start free}
+row3{rocket>Deploy instantly>Push to git, live in seconds.|shield>Enterprise ready>SOC2, GDPR built-in.|chart>Full observability>Real-time errors.} animate:stagger
+pricing{Free>$0/mo>3 projects>/signup:Get started|Pro>$29/mo>Unlimited>/signup:Start trial|Enterprise>Custom>SSO + SLA>/contact:Talk}
+testimonial{Sarah Chen, CEO @ Acme|"Cut deployment time by 90%."|img:https://i.pravatar.cc/64?img=47} animate:fade-up
+foot{© {{year}} {{name}}>/privacy:Privacy>/terms:Terms}
 
-  landing: (n,y) => `# ${n}
-%home dark /
-nav{${n}>/about:About>/login:Sign in}
-hero{The future is now|${n} — built for the next generation.>/signup:Get started for free} animate:blur-in
-row3{rocket>Fast>Zero config, instant results.|bolt>Simple>One command to deploy.|globe>Global>CDN in 180+ countries.}
-foot{© ${y} ${n}}`,
+---
 
-  crud: (n,y) => `# ${n}
-%users dark /users
+%login dark /login
+nav{{{name}}>/signup:Create account}
+hero{Welcome back|Sign in to continue.}
+form POST /api/auth/login => redirect /dashboard { Email:email | Password:password }
+foot{© {{year}} {{name}}}
+
+---
+
+%signup dark /signup
+nav{{{name}}>/login:Sign in}
+hero{Start for free|No credit card required.}
+form POST /api/auth/register => redirect /dashboard { Name:text | Email:email | Password:password }
+foot{© {{year}} {{name}}}
+
+---
+
+%dashboard dark /dashboard
 @users = []
+@stats = {}
 ~mount GET /api/users => @users
-nav{${n}>/users:Users>/settings:Settings}
-sect{User Management}
-table @users { Name:name | Email:email | Plan:plan | Status:status | edit PUT /api/users/{id} | delete /api/users/{id} | empty: No users yet. }
-sect{Add User}
-form POST /api/users => @users.push($result) { Full name:text:Alice Johnson | Email:email:alice@company.com | Plan:select:starter,pro,enterprise }
-foot{© ${y} ${n}}`,
+~mount GET /api/stats => @stats
+nav{{{name}}>/logout:Sign out}
+stats{@stats:Total users}
+sect{Users}
+table @users { Name:name | Email:email | Plan:plan | edit PUT /api/users/{id} | delete /api/users/{id} | empty: No users yet. }
+foot{{{name}} Dashboard}`,
 
-  default: (n,y) => `# ${n}
+  landing: `# {{name}}
 %home dark /
-nav{${n}>/login:Sign in}
-hero{Welcome to ${n}|Edit pages/home.flux to get started.>/signup:Get started} animate:fade-up
+nav{{{name}}>/about:About>/contact:Contact}
+hero{The future is now|{{name}} — built for the next generation.>/signup:Get started for free} animate:blur-in
+row3{rocket>Fast>Zero config, instant results.|bolt>Simple>One command to deploy.|globe>Global>CDN in 180+ countries.}
+foot{© {{year}} {{name}}}`,
+
+  crud: `# {{name}}
+%items dark /
+@items = []
+~mount GET /api/items => @items
+nav{{{name}}>/items:Items>/settings:Settings}
+sect{Manage Items}
+table @items { Name:name | Status:status | edit PUT /api/items/{id} | delete /api/items/{id} | empty: No items yet. }
+form POST /api/items => @items.push($result) { Name:text:Item name | Status:select:active,inactive }
+foot{© {{year}} {{name}}}`,
+
+  blog: `# {{name}}
+%home dark /
+@posts = []
+~mount GET /api/posts => @posts
+nav{{{name}}>/about:About}
+hero{{{name}}|A blog about things that matter.} animate:fade-up
+table @posts { Title:title | Date:created_at | empty: No posts yet. }
+foot{© {{year}} {{name}}}`,
+
+  portfolio: `# {{name}}
+~theme accent=#f59e0b radius=2rem font=Syne bg=#0c0a09 text=#fafaf9
+
+%home dark /
+nav{{{name}}>/work:Work>/contact:Contact}
+hero{Design & code.|Creative work for bold brands.>/work:See my work} animate:blur-in
+row3{globe>10+ countries>Clients from 3 continents.|star>50+ projects>From startups to Fortune 500.|check>On time>98% on-schedule delivery.} animate:stagger
+gallery{https://images.unsplash.com/photo-1518770660439?w=600|https://images.unsplash.com/photo-1561070791-2526d30994b5?w=600|https://images.unsplash.com/photo-1558655146?w=600}
+testimonial{Marco Rossi, CEO|"Exceptional work from start to finish."|img:https://i.pravatar.cc/64?img=11}
+foot{© {{year}} {{name}}>/github:GitHub>/linkedin:LinkedIn}`,
+
+  dashboard: `# {{name}}
+%main dark /
+@stats = {}
+@items = []
+~mount GET /api/stats => @stats
+~mount GET /api/items => @items
+~interval 30000 GET /api/stats => @stats
+nav{{{name}}>/logout:Sign out}
+stats{@stats.total:Total|@stats.active:Active|@stats.revenue:Revenue}
+sect{Recent Items}
+table @items { Name:name | Status:status | Date:created_at | edit PUT /api/items/{id} | delete /api/items/{id} | empty: No data. }
+sect{Add Item}
+form POST /api/items => @items.push($result) { Name:text | Status:select:active,inactive }
+foot{{{name}}}`,
+
+  default: `# {{name}}
+%home dark /
+nav{{{name}}>/login:Sign in}
+hero{Welcome to {{name}}|Edit pages/home.flux to get started.>/signup:Get started} animate:fade-up
 row3{rocket>Fast>Renders in under 1ms.|bolt>AI-native>Written by Claude in seconds.|globe>Deploy anywhere>Static files. Any host.}
-foot{© ${y} ${n}}`,
+foot{© {{year}} {{name}}}`,
+}
+
+function applyTemplateVars(src, name, year) {
+  return src.replace(/\{\{name\}\}/g, name).replace(/\{\{year\}\}/g, year)
+}
+
+function getTemplate(tplName, name, year) {
+  ensureTemplatesDir()
+
+  // 1. Local file path: --template ./my-template.flux or --template /abs/path.flux
+  if (tplName.startsWith('./') || tplName.startsWith('../') || tplName.startsWith('/')) {
+    const full = path.resolve(tplName)
+    if (!fs.existsSync(full)) { console.error(`\n  ✗  Template file not found: ${full}\n`); process.exit(1) }
+    return applyTemplateVars(fs.readFileSync(full, 'utf8'), name, year)
+  }
+
+  // 2. User custom template: ~/.aiplang/templates/<name>.flux
+  const customPath = path.join(TEMPLATES_DIR, tplName + '.flux')
+  if (fs.existsSync(customPath)) {
+    return applyTemplateVars(fs.readFileSync(customPath, 'utf8'), name, year)
+  }
+
+  // 3. Built-in template
+  const builtin = BUILTIN_TEMPLATES[tplName]
+  if (builtin) return applyTemplateVars(builtin, name, year)
+
+  // Not found — show what's available
+  const customs = fs.existsSync(TEMPLATES_DIR)
+    ? fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.flux')).map(f=>f.replace('.flux',''))
+    : []
+  const all = [...Object.keys(BUILTIN_TEMPLATES).filter(k=>k!=='default'), ...customs]
+  console.error(`\n  ✗  Template "${tplName}" not found.\n  Available: ${all.join(', ')}\n`)
+  process.exit(1)
+}
+
+function listTemplates() {
+  ensureTemplatesDir()
+  const builtins = Object.keys(BUILTIN_TEMPLATES).filter(k=>k!=='default')
+  const customs  = fs.readdirSync(TEMPLATES_DIR).filter(f=>f.endsWith('.flux')).map(f=>f.replace('.flux',''))
+  console.log(`\n  aiplang templates\n`)
+  console.log(`  Built-in:`)
+  builtins.forEach(t => console.log(`    ${t}`))
+  if (customs.length) {
+    console.log(`\n  Custom (${TEMPLATES_DIR}):`)
+    customs.forEach(t => console.log(`    ${t}  ✓`))
+  } else {
+    console.log(`\n  Custom:  (none yet — use "aiplang template save <name>" to create one)`)
+  }
+  console.log()
+}
+
+// ── template subcommand ──────────────────────────────────────────
+if (cmd === 'template') {
+  const sub = args[0]
+  ensureTemplatesDir()
+
+  // aiplang template list
+  if (!sub || sub === 'list' || sub === 'ls') {
+    listTemplates(); process.exit(0)
+  }
+
+  // aiplang template save <name> [--from <file>]
+  if (sub === 'save' || sub === 'add') {
+    const tname = args[1]
+    if (!tname) { console.error('\n  ✗  Usage: aiplang template save <name> [--from <file>]\n'); process.exit(1) }
+    const fromIdx = args.indexOf('--from')
+    let src
+    if (fromIdx !== -1 && args[fromIdx+1]) {
+      const fp = path.resolve(args[fromIdx+1])
+      if (!fs.existsSync(fp)) { console.error(`\n  ✗  File not found: ${fp}\n`); process.exit(1) }
+      src = fs.readFileSync(fp, 'utf8')
+    } else {
+      // Auto-detect: use pages/ directory or app.flux
+      const sources = ['pages', 'app.flux', 'index.flux']
+      const found = sources.find(s => fs.existsSync(s))
+      if (!found) { console.error('\n  ✗  No .flux files found. Use --from <file> to specify source.\n'); process.exit(1) }
+      if (fs.statSync(found).isDirectory()) {
+        src = fs.readdirSync(found).filter(f=>f.endsWith('.flux'))
+          .map(f => fs.readFileSync(path.join(found,f),'utf8')).join('\n---\n')
+      } else {
+        src = fs.readFileSync(found, 'utf8')
+      }
+    }
+    const dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    fs.writeFileSync(dest, src)
+    console.log(`\n  ✓  Template saved: ${tname}\n     ${dest}\n\n  Use it: aiplang init my-app --template ${tname}\n`)
+    process.exit(0)
+  }
+
+  // aiplang template remove <name>
+  if (sub === 'remove' || sub === 'rm' || sub === 'delete') {
+    const tname = args[1]
+    if (!tname) { console.error('\n  ✗  Usage: aiplang template remove <name>\n'); process.exit(1) }
+    const dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    if (!fs.existsSync(dest)) { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
+    fs.unlinkSync(dest)
+    console.log(`\n  ✓  Removed template: ${tname}\n`); process.exit(0)
+  }
+
+  // aiplang template edit <name>
+  if (sub === 'edit' || sub === 'open') {
+    const tname = args[1]
+    if (!tname) { console.error('\n  ✗  Usage: aiplang template edit <name>\n'); process.exit(1) }
+    let dest = path.join(TEMPLATES_DIR, tname + '.flux')
+    if (!fs.existsSync(dest)) {
+      // create from built-in if exists
+      const builtin = BUILTIN_TEMPLATES[tname]
+      if (builtin) { fs.writeFileSync(dest, builtin); console.log(`\n  ✓  Copied built-in "${tname}" to custom templates.\n`) }
+      else { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
+    }
+    const editor = process.env.EDITOR || process.env.VISUAL || 'code'
+    try { require('child_process').spawnSync(editor, [dest], { stdio: 'inherit' }) }
+    catch { console.log(`\n  Template path: ${dest}\n  Open it in your editor.\n`) }
+    process.exit(0)
+  }
+
+  // aiplang template show <name>
+  if (sub === 'show' || sub === 'cat') {
+    const tname = args[1] || 'default'
+    const customPath = path.join(TEMPLATES_DIR, tname + '.flux')
+    if (fs.existsSync(customPath)) { console.log(fs.readFileSync(customPath,'utf8')); process.exit(0) }
+    const builtin = BUILTIN_TEMPLATES[tname]
+    if (builtin) { console.log(builtin); process.exit(0) }
+    console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1)
+  }
+
+  // aiplang template export <name> [--out <file>]
+  if (sub === 'export') {
+    const tname = args[1]
+    if (!tname) { console.error('\n  ✗  Usage: aiplang template export <name>\n'); process.exit(1) }
+    const outIdx = args.indexOf('--out')
+    const outFile = outIdx !== -1 ? args[outIdx+1] : `./${tname}.flux`
+    const customPath = path.join(TEMPLATES_DIR, tname + '.flux')
+    const src = fs.existsSync(customPath) ? fs.readFileSync(customPath,'utf8') : BUILTIN_TEMPLATES[tname]
+    if (!src) { console.error(`\n  ✗  Template "${tname}" not found.\n`); process.exit(1) }
+    fs.writeFileSync(outFile, src)
+    console.log(`\n  ✓  Exported "${tname}" → ${outFile}\n`)
+    process.exit(0)
+  }
+
+  console.error(`\n  ✗  Unknown template command: ${sub}\n  Commands: list, save, remove, edit, show, export\n`)
+  process.exit(1)
 }
 
 // ── Init ─────────────────────────────────────────────────────────
 if (cmd==='init') {
   const tplIdx = args.indexOf('--template')
-  const tplName = tplIdx!==-1 ? args[tplIdx+1] : 'default'
+  const tplName = tplIdx !== -1 ? args[tplIdx+1] : 'default'
   const name = args.find(a=>!a.startsWith('--')&&a!==tplName)||'aiplang-app'
   const dir  = path.resolve(name), year = new Date().getFullYear()
+
   if (fs.existsSync(dir)) { console.error(`\n  ✗  Directory "${name}" already exists.\n`); process.exit(1) }
-  fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
-  fs.mkdirSync(path.join(dir,'public'), {recursive:true})
-  for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
-    const src=path.join(RUNTIME_DIR,f); if(fs.existsSync(src)) fs.copyFileSync(src,path.join(dir,'public',f))
+
+  // Get template source (built-in, custom, or file path)
+  const tplSrc = getTemplate(tplName, name, year)
+
+  // Check if template has full-stack backend (models/api blocks)
+  const isFullStack = tplSrc.includes('\nmodel ') || tplSrc.includes('\napi ')
+  const isMultiFile = tplSrc.includes('\n---\n')
+
+  if (isFullStack) {
+    // Full-stack project: single app.flux
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'app.flux'), tplSrc)
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+      name, version:'0.1.0',
+      scripts: { dev: 'npx aiplang start app.flux', start: 'npx aiplang start app.flux' },
+      devDependencies: { 'aiplang': `^${VERSION}` }
+    }, null, 2))
+    fs.writeFileSync(path.join(dir, '.env.example'), 'JWT_SECRET=change-me-in-production\n# STRIPE_SECRET_KEY=sk_test_...\n# AWS_ACCESS_KEY_ID=...\n# AWS_SECRET_ACCESS_KEY=...\n# S3_BUCKET=...\n')
+    fs.writeFileSync(path.join(dir, '.gitignore'), '*.db\nnode_modules/\ndist/\n.env\nuploads/\n')
+    fs.writeFileSync(path.join(dir, 'README.md'), `# ${name}\n\nGenerated with [aiplang](https://npmjs.com/package/aiplang) v${VERSION}\n\n## Run\n\n\`\`\`bash\nnpx aiplang start app.flux\n\`\`\`\n`)
+    const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
+    console.log(`\n  ✓  Created ${name}/${label}\n\n     app.flux  ← full-stack app (backend + frontend)\n\n  Next:\n     cd ${name} && npx aiplang start app.flux\n`)
+  } else if (isMultiFile) {
+    // Multi-page SSG project: pages/*.flux
+    fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
+    fs.mkdirSync(path.join(dir,'public'), {recursive:true})
+    for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
+      const src=path.join(RUNTIME_DIR,f); if(fs.existsSync(src)) fs.copyFileSync(src,path.join(dir,'public',f))
+    }
+    const pageBlocks = tplSrc.split('\n---\n')
+    pageBlocks.forEach((block, i) => {
+      const m = block.match(/^%([a-zA-Z0-9_-]+)/m)
+      const pageName = m ? m[1] : (i === 0 ? 'home' : `page${i}`)
+      fs.writeFileSync(path.join(dir,'pages',`${pageName}.flux`), block.trim())
+    })
+    fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
+    fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
+    const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
+    const files = fs.readdirSync(path.join(dir,'pages')).map(f=>f).join(', ')
+    console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/{${files}}  ← edit these\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
+  } else {
+    // Single-page SSG project
+    fs.mkdirSync(path.join(dir,'pages'), {recursive:true})
+    fs.mkdirSync(path.join(dir,'public'), {recursive:true})
+    for (const f of ['aiplang-runtime.js','aiplang-hydrate.js']) {
+      const src=path.join(RUNTIME_DIR,f); if(fs.existsSync(src)) fs.copyFileSync(src,path.join(dir,'public',f))
+    }
+    fs.writeFileSync(path.join(dir,'pages','home.flux'), tplSrc)
+    fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
+    fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
+    const label = tplName !== 'default' ? ` (template: ${tplName})` : ''
+    console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/home.flux  ← edit this\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
   }
-  fs.writeFileSync(path.join(dir,'public','index.html'),`<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name}</title>
-<meta http-equiv="refresh" content="0; url=/">
-</head><body><p>Run <code>npx aiplang serve</code> to start the dev server.</p></body></html>`)
-  fs.writeFileSync(path.join(dir,'pages','home.flux'), (TEMPLATES[tplName]||TEMPLATES.default)(name, year))
-  fs.writeFileSync(path.join(dir,'package.json'), JSON.stringify({name,version:'0.1.0',scripts:{dev:'npx aiplang serve',build:'npx aiplang build pages/ --out dist/'},devDependencies:{'aiplang':`^${VERSION}`}},null,2))
-  fs.writeFileSync(path.join(dir,'.gitignore'),'dist/\nnode_modules/\n')
-  const label = tplName!=='default' ? ` (template: ${tplName})` : ''
-  console.log(`\n  ✓  Created ${name}/${label}\n\n     pages/home.flux  ← edit this\n\n  Next:\n     cd ${name} && npx aiplang serve\n`)
   process.exit(0)
 }
 
