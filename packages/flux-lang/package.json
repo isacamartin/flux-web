@@ -1,0 +1,35 @@
+{
+  "name": "flux-lang",
+  "version": "1.0.0",
+  "description": "AI-first web language. Write a full app in 20 lines. Compiles to pre-rendered HTML with reactive hydration.",
+  "keywords": [
+    "flux", "ai", "web", "language", "compiler", "ssg",
+    "reactive", "dom", "framework", "claude", "ai-first"
+  ],
+  "author": "isacamartin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isacamartin/flux.git"
+  },
+  "homepage": "https://isacamartin.github.io/flux",
+  "bugs": {
+    "url": "https://github.com/isacamartin/flux/issues"
+  },
+  "bin": {
+    "flux": "./bin/flux.js",
+    "flux-lang": "./bin/flux.js"
+  },
+  "main": "./runtime/flux-runtime.js",
+  "files": [
+    "bin/",
+    "runtime/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "test": "node bin/flux.js --version"
+  }
+}
