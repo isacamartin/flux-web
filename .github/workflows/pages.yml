@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -21,26 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install aiplang
-        run: npm install -g aiplang
-
-      - name: Build landing page
+      - name: Build site
         run: |
           mkdir -p _site
-          # Build .flux pages if they exist
-          if ls docs/*.flux 1> /dev/null 2>&1; then
-            aiplang build docs/ --out _site/
-          else
-            # Copy static docs
-            cp -r docs/. _site/
-          fi
-          # Copy comparison files
-          cp docs/comparison.html _site/ 2>/dev/null || true
+          cp -r docs/. _site/
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
