@@ -12,7 +12,7 @@ Contexto: projeto AI-first, zero uso humano direto do código.
 // server.js:138 — DIRETO NA QUERY SEM SANITIZAR
 sql += ` ORDER BY ${opts.order}`
 ```
-**Problema:** `User.all(order=created_at desc)` — `opts.order` vem do `.aiplang` parseado.
+**Problema:** `User.all(order=created_at desc)` — `opts.order` vem do `.aip` parseado.
 Se Claude gerar `order=id; DROP TABLE users--` por engano, funciona.
 **Fix:**
 ```js
@@ -25,7 +25,7 @@ if (opts.order && SAFE_ORDER.test(opts.order)) sql += ` ORDER BY ${opts.order}`
 // server.js:151 — field vai direto na query
 `WHERE ${field} = ?`
 ```
-`field` vem do código `.aiplang` (interno, não de input do usuário), mas ainda assim precisa validação de coluna.
+`field` vem do código `.aip` (interno, não de input do usuário), mas ainda assim precisa validação de coluna.
 
 ### 3. Sem rate limit nos endpoints de auth
 `/api/auth/login` e `/api/auth/register` sem throttle por padrão.
@@ -83,7 +83,7 @@ if (f.modifiers.includes('unique') || f.modifiers.includes('index')) {
 Node.js single process. CPU-bound = trava tudo.
 **Fix simples:** No `startServer`, detect `cluster` mode via env:
 ```js
-// PORT=3000 WORKERS=4 aiplang start app.aiplang
+// PORT=3000 WORKERS=4 aiplang start app.aip
 ```
 
 ### 9. Sem compressão por padrão

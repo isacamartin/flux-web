@@ -1,4 +1,5 @@
 # aiplang — syntax reference
+File extension: `.aip` (e.g. `app.aip`, `home.aip`)
 Generate ONLY aiplang code. No React, HTML, or other frameworks. No explanations unless asked.
 
 ## File structure

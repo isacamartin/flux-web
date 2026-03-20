@@ -1206,7 +1206,7 @@ function getMime(filename) {
 //     name: 'my-plugin',
 //     setup(server, app, utils) {
 //       // server  = AiplangServer instance (.addRoute, .models)
-//       // app     = parsed .aiplang app definition
+//       // app     = parsed .aip app definition
 //       // utils   = { uuid, now, emit, on, dispatch, resolveEnv, dbRun, dbAll, dbGet }
 //     }
 //   }
@@ -1456,7 +1456,7 @@ async function startServer(aipFile, port = 3000) {
 module.exports = { startServer, parseApp, Model, getDB, dispatch, on, emit, sendMail, setupStripe, registerStripeRoutes, setupS3, registerS3Routes, s3Upload, s3Delete, s3PresignedUrl, PLUGIN_UTILS }
 if (require.main === module) {
   const f=process.argv[2], p=parseInt(process.argv[3]||process.env.PORT||'3000')
-  if (!f) { console.error('Usage: node server.js <app.aiplang> [port]'); process.exit(1) }
+  if (!f) { console.error('Usage: node server.js <app.aip> [port]'); process.exit(1) }
   startServer(f, p).catch(e=>{console.error(e);process.exit(1)})
 }
 

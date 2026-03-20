@@ -93,7 +93,7 @@ body {
   backdrop-filter: blur(12px);
 }
 .panel-header.react-h { background: rgba(3,5,10,.9); border-top: 2px solid var(--react) }
-.panel-header.aiplang-h  { background: rgba(3,5,10,.9); border-top: 2px solid var(--aiplang) }
+.panel-header.aip-h  { background: rgba(3,5,10,.9); border-top: 2px solid var(--aiplang) }
 
 .panel-title {
   font-family: var(--display);
@@ -102,7 +102,7 @@ body {
   letter-spacing: .02em;
 }
 .panel-title.react { color: var(--react) }
-.panel-title.aiplang  { color: var(--aiplang) }
+.panel-title.aip  { color: var(--aiplang) }
 
 .panel-badge {
   font-size: .65rem;
@@ -113,7 +113,7 @@ body {
   text-transform: uppercase;
 }
 .panel-badge.react { background: var(--react-dim); color: var(--react); border: 1px solid rgba(97,218,251,.15) }
-.panel-badge.aiplang  { background: var(--aiplang-dim);  color: var(--aiplang);  border: 1px solid rgba(163,230,53,.2) }
+.panel-badge.aip  { background: var(--aiplang-dim);  color: var(--aiplang);  border: 1px solid rgba(163,230,53,.2) }
 
 /* ── Metrics bar ── */
 .metrics-bar {
@@ -193,7 +193,7 @@ body {
 .bubble.user   { background: #0f1a24; color: #94a3b8; border: 1px solid var(--border2) }
 .bubble.claude { background: var(--surface); border: 1px solid var(--border2) }
 .bubble.claude.react-bubble { border-color: rgba(97,218,251,.1) }
-.bubble.claude.aiplang-bubble  { border-color: rgba(163,230,53,.1) }
+.bubble.claude.aip-bubble  { border-color: rgba(163,230,53,.1) }
 
 .typing {
   display: inline-flex;
@@ -273,10 +273,10 @@ body {
   transition: width 1.5s cubic-bezier(.4,0,.2,1);
 }
 .prog-fill.react { background: linear-gradient(90deg, #61dafb, #0ea5e9) }
-.prog-fill.aiplang  { background: linear-gradient(90deg, #a3e635, #65a30d) }
+.prog-fill.aip  { background: linear-gradient(90deg, #a3e635, #65a30d) }
 .prog-val { font-size: .7rem; font-weight: 700; width: 60px; text-align: right; flex-shrink: 0 }
 .prog-val.react { color: var(--react) }
-.prog-val.aiplang  { color: var(--aiplang) }
+.prog-val.aip  { color: var(--aiplang) }
 
 /* ── Result preview ── */
 .result-section {
@@ -335,7 +335,7 @@ body {
   letter-spacing: .05em;
 }
 .summary-title.react { color: var(--react) }
-.summary-title.aiplang  { color: var(--aiplang) }
+.summary-title.aip  { color: var(--aiplang) }
 .summary-row {
   display: flex;
   justify-content: space-between;
@@ -963,18 +963,18 @@ async function runComparison() {
 
   // Stream both simultaneously
   const msPerLineReact = Math.round(sc.react.timeSec * 1000 / sc.react.lines)
-  const msPerLineAiplang  = Math.round(sc.aiplang.timeSec  * 1000 / sc.aiplang.lines)
+  const msPerLineAiplang  = Math.round(sc.aip.timeSec  * 1000 / sc.aip.lines)
 
   const reactStream = streamCode('react-terminal', sc.react.codeLines, 'react-bubble', msPerLineReact)
-  const aiplangStream  = streamCode('aiplang-terminal',  sc.aiplang.codeLines,  'aiplang-bubble',  msPerLineAiplang)
+  const aiplangStream  = streamCode('aiplang-terminal',  sc.aip.codeLines,  'aiplang-bubble',  msPerLineAiplang)
 
   // Update metrics as streaming happens
   setTimeout(() => {
-    document.getElementById('f-tokens').textContent = sc.aiplang.tokens
-    document.getElementById('f-lines').textContent  = sc.aiplang.lines
-    document.getElementById('f-time').textContent   = sc.aiplang.timeSec + 's'
-    document.getElementById('f-files').textContent  = sc.aiplang.files
-  }, sc.aiplang.timeSec * 1000 + 200)
+    document.getElementById('f-tokens').textContent = sc.aip.tokens
+    document.getElementById('f-lines').textContent  = sc.aip.lines
+    document.getElementById('f-time').textContent   = sc.aip.timeSec + 's'
+    document.getElementById('f-files').textContent  = sc.aip.files
+  }, sc.aip.timeSec * 1000 + 200)
 
   setTimeout(() => {
     document.getElementById('r-tokens').textContent = sc.react.tokens.toLocaleString()
@@ -987,7 +987,7 @@ async function runComparison() {
 
   // Show files
   showFiles('react-files', sc.react.fileList, 100)
-  showFiles('aiplang-files',  sc.aiplang.fileList,  100)
+  showFiles('aiplang-files',  sc.aip.fileList,  100)
 
   await sleep(600)
 
@@ -996,14 +996,14 @@ async function runComparison() {
   animateProgress('pr-js',  100, 200)
   animateProgress('pr-fcp', 100, 300)
   animateProgress('pr-seo', sc.react.seo ? 100 : 8, 400)
-  animateProgress('pf-js',  (sc.aiplang.jsKB / maxJS)  * 100, 200)
-  animateProgress('pf-fcp', (sc.aiplang.fcpMs / maxFCP) * 100, 300)
+  animateProgress('pf-js',  (sc.aip.jsKB / maxJS)  * 100, 200)
+  animateProgress('pf-fcp', (sc.aip.fcpMs / maxFCP) * 100, 300)
   animateProgress('pf-seo', 100, 400)
 
   await sleep(800)
 
   // Summary tables
-  const tokenRatio = Math.round(sc.react.tokens / sc.aiplang.tokens)
+  const tokenRatio = Math.round(sc.react.tokens / sc.aip.tokens)
   setSummary('react-summary', [
     ['Tokens gerados',  sc.react.tokens.toLocaleString(), 'bad'],
     ['Linhas de código', sc.react.lines, 'bad'],
@@ -1015,12 +1015,12 @@ async function runComparison() {
     ['Config files',    'Sim (4)', 'warn'],
   ])
   setSummary('aiplang-summary', [
-    ['Tokens gerados',  sc.aiplang.tokens, 'good'],
-    ['Linhas de código', sc.aiplang.lines, 'good'],
-    ['Tempo de geração', sc.aiplang.timeSec + 's', 'good'],
-    ['Arquivos criados', sc.aiplang.files, 'good'],
-    ['JS no browser',   sc.aiplang.jsKB + 'KB', 'good'],
-    ['First paint',     sc.aiplang.fcpMs + 'ms', 'good'],
+    ['Tokens gerados',  sc.aip.tokens, 'good'],
+    ['Linhas de código', sc.aip.lines, 'good'],
+    ['Tempo de geração', sc.aip.timeSec + 's', 'good'],
+    ['Arquivos criados', sc.aip.files, 'good'],
+    ['JS no browser',   sc.aip.jsKB + 'KB', 'good'],
+    ['First paint',     sc.aip.fcpMs + 'ms', 'good'],
     ['SEO',             'Sim (SSG)', 'good'],
     ['Config files',    'Nenhum', 'good'],
   ])
@@ -1031,10 +1031,10 @@ async function runComparison() {
   document.getElementById('verdict-num').textContent = tokenRatio + '×'
   document.getElementById('verdict-text').innerHTML = `
     <b>aiplang é ${tokenRatio}× mais rápido para Claude gerar</b> esse app.<br>
-    ${sc.react.tokens.toLocaleString()} tokens vs ${sc.aiplang.tokens} tokens —
-    ${sc.react.timeSec}s vs ${sc.aiplang.timeSec}s de geração.<br>
-    No browser: ${sc.react.fcpMs}ms first paint vs ${sc.aiplang.fcpMs}ms.
-    JS baixado: ${sc.react.jsKB}KB vs ${sc.aiplang.jsKB}KB.
+    ${sc.react.tokens.toLocaleString()} tokens vs ${sc.aip.tokens} tokens —
+    ${sc.react.timeSec}s vs ${sc.aip.timeSec}s de geração.<br>
+    No browser: ${sc.react.fcpMs}ms first paint vs ${sc.aip.fcpMs}ms.
+    JS baixado: ${sc.react.jsKB}KB vs ${sc.aip.jsKB}KB.
     SEO: ${sc.react.seo ? 'ambos' : 'só aiplang'}.
   `
   verdict.style.display = 'flex'
