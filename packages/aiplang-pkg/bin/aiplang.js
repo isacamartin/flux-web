@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.7.3'
+const VERSION     = '2.7.4'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -734,14 +734,22 @@ function renderPage(page, allPages) {
   const hydrate=needsJS?`\n<script>window.__AIPLANG_PAGE__=${config};</script>\n<script src="./aiplang-hydrate.js" defer></script>`:''
   const customVars=page.customTheme?genCustomThemeVars(page.customTheme):''
   const themeVarCSS=page.themeVars?genThemeVarCSS(page.themeVars):''
+  // Extract app name from nav brand if available
+  const _navBlock = page.blocks.find(b=>b.kind==='nav')
+  const _brand = _navBlock?.brand || ''
+  const _title = _brand ? `${esc(_brand)} — ${esc(page.id.charAt(0).toUpperCase()+page.id.slice(1))}` : esc(page.id.charAt(0).toUpperCase()+page.id.slice(1))
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(page.id.charAt(0).toUpperCase()+page.id.slice(1))}</title>
+<title>${_title}</title>
 <link rel="canonical" href="${esc(page.route)}">
 <meta name="robots" content="index,follow">
+<meta name="description" content="${esc((()=>{const h=page.blocks.find(b=>b.kind==='hero');if(!h)return '';const m=h.rawLine&&h.rawLine.match(/\{([^}]+)\}/);if(!m)return '';const p=m[1].split('>');const s=p[0].split('|')[1];return s?s.trim():''})())}">
+<meta property="og:title" content="${_title}">
+<meta property="og:type" content="website">
+<meta property="og:type" content="website">
 <style>${css(page.theme)}${customVars}${themeVarCSS}</style>
 </head>
 <body>
