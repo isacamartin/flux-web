@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.9.4'
+const VERSION     = '2.10.0'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -648,9 +648,15 @@ function parseBlock(line) {
     const binding=line.slice(start,idx).trim().replace(/^@/,'@')
     const content=line.slice(idx+1,line.lastIndexOf('}')).trim()
     const em=content.match(/edit\s+(PUT|PATCH)\s+(\S+)/), dm=content.match(/delete\s+(?:DELETE\s+)?(\S+)/)
-    const clean=content.replace(/edit\s+(PUT|PATCH)\s+\S+/g,'').replace(/delete\s+(?:DELETE\s+)?\S+/g,'')
+    const fallbackM=content.match(/fallback\s*:\s*([^|]+)/)
+    const retryM=content.match(/retry\s*:\s*(\S+)/)
+    const clean=content
+      .replace(/edit\s+(PUT|PATCH)\s+\S+/g,'')
+      .replace(/delete\s+(?:DELETE\s+)?\S+/g,'')
+      .replace(/fallback\s*:[^|]+/g,'')
+      .replace(/retry\s*:\s*\S+/g,'')
     const cols=parseCols(clean)
-    return{kind:'table',binding,cols:Array.isArray(cols)?cols:[],empty:parseEmpty(clean),editPath:em?.[2]||null,editMethod:em?.[1]||'PUT',deletePath:dm?.[1]||null,deleteKey:'id',extraClass,animate,variant,style,bg}
+    return{kind:'table',binding,cols:Array.isArray(cols)?cols:[],empty:parseEmpty(clean),editPath:em?.[2]||null,editMethod:em?.[1]||'PUT',deletePath:dm?.[1]||null,deleteKey:'id',fallback:fallbackM?.[1]?.trim()||null,retry:retryM?.[1]||null,extraClass,animate,variant,style,bg}
   }
 
   // ── form ────────────────────────────────────────────────────
@@ -658,12 +664,17 @@ function parseBlock(line) {
     const bi=line.indexOf('{');if(bi===-1) return null
     let head=line.slice(line.startsWith('form{')?4:5,bi).trim()
     const content=line.slice(bi+1,line.lastIndexOf('}')).trim()
-    let action=''; const ai=head.indexOf('=>')
-    if(ai!==-1){action=head.slice(ai+2).trim();head=head.slice(0,ai).trim()}
+    let action='', optimistic=false; const ai=head.indexOf('=>')
+    if(ai!==-1){
+      action=head.slice(ai+2).trim()
+      // Optimistic: => @list.optimistic($result)
+      if(action.includes('.optimistic(')){optimistic=true;action=action.replace('.optimistic','')}
+      head=head.slice(0,ai).trim()
+    }
     const parts=head.trim().split(/\s+/)
     const method=parts[0]&&['GET','POST','PUT','PATCH','DELETE'].includes(parts[0].toUpperCase())?parts[0].toUpperCase():'POST'
     const bpath=parts[method===parts[0].toUpperCase()?1:0]||''
-    return{kind:'form',method,bpath,action,fields:parseFields(content)||[],extraClass,animate,variant,style,bg}
+    return{kind:'form',method,bpath,action,optimistic,fields:parseFields(content)||[],extraClass,animate,variant,style,bg}
   }
 
   // ── pricing ─────────────────────────────────────────────────
@@ -858,9 +869,31 @@ function renderBlock(b, page) {
     case 'testimonial': return rTestimonial(b)
     case 'gallery':     return rGallery(b)
     case 'raw':         return (b.html||'')+'\n'
+    case 'html':        return `<div class="fx-html">${b.content||''}</div>\n`
+    case 'spacer':      return `<div class="fx-spacer" style="height:${esc(b.height||'2rem')}"></div>\n`
+    case 'divider':     return b.label?`<div class="fx-divider"><span class="fx-divider-label">${esc(b.label)}</span></div>\n`:`<hr class="fx-hr">\n`
+    case 'badge':       return `<div class="fx-badge-row"><span class="fx-badge-tag">${esc(b.content||'')}</span></div>\n`
+    case 'card':        return rCardBlock(b)
+    case 'cols':        return rColsBlock(b)
+    case 'each':        return `<div class="fx-each fx-each-${b.variant||'list'}" data-fx-each="${esc(b.binding||'')}" data-fx-tpl="${esc(b.tpl||'')}"${b.style?` style="${b.style.replace(/,/g,';')}"`:''}>\n<div class="fx-each-empty fx-td-empty">Loading...</div></div>\n`
     case 'if':          return `<div class="fx-if-wrap" data-fx-if="${esc(b.cond)}" style="display:none"></div>\n`
     default: return ''
   }
+}
+
+function rCardBlock(b) {
+  const img=b.img?`<img src="${esc(b.img)}" class="fx-card-img" alt="${esc(b.title||'')}" loading="lazy">`:'';
+  const badge=b.badge?`<span class="fx-card-badge">${esc(b.badge)}</span>`:'';
+  const title=b.title?`<h3 class="fx-card-title">${esc(b.title)}</h3>`:'';
+  const sub=b.subtitle?`<p class="fx-card-body">${esc(b.subtitle)}</p>`:'';
+  const link=b.link?`<a href="${esc(b.link.split(':')[0])}" class="fx-card-link">${esc(b.link.split(':')[1]||'View')} →</a>`:'';
+  const bg=b.bg?` style="background:${b.bg}"`:b.style?` style="${b.style.replace(/,/g,';')}"`:''
+  return`<div class="fx-card"${bg}>${img}${badge}${title}${sub}${link}</div>\n`
+}
+function rColsBlock(b) {
+  const cols=(b.items||[]).map(col=>`<div class="fx-col">${col}</div>`).join('')
+  const style=b.style?` style="${b.style.replace(/,/g,';')}"`:''
+  return`<div class="fx-cols fx-cols-${b.n||2}"${style}>${cols}</div>\n`
 }
 
 function rNav(b) {
@@ -973,7 +1006,9 @@ function rTable(b) {
   const da=b.deletePath?` data-fx-delete="${esc(b.deletePath)}"`:''
   const at=(b.editPath||b.deletePath)?'<th class="fx-th fx-th-actions">Actions</th>':''
   const span=cols.length+((b.editPath||b.deletePath)?1:0)
-  return `<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(b.binding)}" data-fx-cols='${keys}' data-fx-col-map='${cm}'${ea}${da}><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${span}" class="fx-td-empty">${esc(b.empty)}</td></tr></tbody></table></div>\n`
+  const fallbackAttr=b.fallback?` data-fx-fallback="${esc(b.fallback)}"`:''
+  const retryAttr=b.retry?` data-fx-retry="${esc(b.retry)}"`:''
+  return `<div class="fx-table-wrap"><table class="fx-table" data-fx-table="${esc(b.binding)}" data-fx-cols='${keys}' data-fx-col-map='${cm}'${ea}${da}${fallbackAttr}${retryAttr}><thead><tr>${ths}${at}</tr></thead><tbody class="fx-tbody"><tr><td colspan="${span}" class="fx-td-empty">${esc(b.empty)}</td></tr></tbody></table></div>\n`
 }
 
 function rForm(b) {
@@ -993,7 +1028,8 @@ function rForm(b) {
   if(v==='minimal') {
     return `<div class="fx-form-minimal"><form data-fx-form="${esc(b.bpath)}" data-fx-method="${esc(b.method)}" data-fx-action="${esc(b.action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">${esc(label)}</button></form></div>\n`
   }
-  return `<div class="fx-form-wrap"><form class="fx-form"${bgStyle} data-fx-form="${esc(b.bpath)}" data-fx-method="${esc(b.method)}" data-fx-action="${esc(b.action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">${esc(label)}</button></form></div>\n`
+  const optAttr=b.optimistic?' data-fx-optimistic="true"':''
+  return `<div class="fx-form-wrap"><form class="fx-form"${bgStyle}${optAttr} data-fx-form="${esc(b.bpath)}" data-fx-method="${esc(b.method)}" data-fx-action="${esc(b.action)}">${fields}<div class="fx-form-msg"></div><button type="submit" class="fx-btn">${esc(label)}</button></form></div>\n`
 }
 
 function rBtn(b) {
