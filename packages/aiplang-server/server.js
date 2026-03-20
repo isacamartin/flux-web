@@ -325,7 +325,9 @@ function validateAndCoerce(data, schema) {
 
     // Coerce type
     if (val !== undefined && val !== null) {
-      if (def.type === 'int') {
+      if (Array.isArray(val) || (typeof val === 'object' && val !== null && def.type !== 'json')) {
+        errors.push(`${col}: expected ${def.type}, got ${Array.isArray(val)?'array':'object'}`)
+      } else if (def.type === 'int') {
         const n = parseInt(val)
         if (isNaN(n)) errors.push(`${col}: expected integer, got "${val}"`)
         else out[col] = n
@@ -706,7 +708,13 @@ function parseEventLine(s) { const m=s.match(/^(\S+)\s*=>\s*(.+)$/); return{even
 function parseField(line) {
   const p=line.split(':').map(s=>s.trim())
   const f={name:p[0],type:p[1]||'text',modifiers:[],enumVals:[],default:null}
-  for(let j=2;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x.startsWith('enum:'))f.enumVals=x.slice(5).split(',');else if(x)f.modifiers.push(x)}
+  // If type is enum, p[2] contains comma-separated values directly
+  if (f.type === 'enum' && p[2] && !p[2].startsWith('default=') && !['required','unique','hashed','pk','auto','index'].includes(p[2])) {
+    f.enumVals = p[2].split(',').map(v=>v.trim()).filter(Boolean)
+    for(let j=3;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x)f.modifiers.push(x)}
+  } else {
+    for(let j=2;j<p.length;j++){const x=p[j];if(x.startsWith('default='))f.default=x.slice(8);else if(x.startsWith('enum:'))f.enumVals=x.slice(5).split(',').map(v=>v.trim());else if(x)f.modifiers.push(x)}
+  }
   return f
 }
 function parseAPILine(line, route) {
@@ -1710,7 +1718,7 @@ async function startServer(aipFile, port = 3000) {
   migrateModels(app.models)
 
   // Register models
-  for (const m of app.models) srv.registerModel(m.name, { softDelete: m.softDelete, timestamps: true })
+  for (const m of app.models) srv.registerModel(m.name, MODEL_DEFS[m.name] || { softDelete: m.softDelete, timestamps: true })
 
   // Events
   for (const ev of app.events) on(ev.event, (data) => console.log(`[aiplang:event] ${ev.event}:`, ev.action))
@@ -1789,7 +1797,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.9.3',
+    status:'ok', version:'2.9.4',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,
