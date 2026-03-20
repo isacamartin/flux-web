@@ -1,0 +1,81 @@
+{
+  "name": "aiplang",
+  "scopeName": "source.aip",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#directive" },
+    { "include": "#model" },
+    { "include": "#api" },
+    { "include": "#page" },
+    { "include": "#block" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.aip",
+      "match": "#.*$"
+    },
+    "directive": {
+      "patterns": [
+        {
+          "name": "keyword.control.aip",
+          "match": "^~(env|db|auth|mail|s3|stripe|plan|admin|use|plugin|realtime|import|lang)\\b"
+        },
+        {
+          "name": "keyword.operator.aip",
+          "match": "^~(guard|validate|unique|hash|check|cache|broadcast|rateLimit|dispatch|emit|mail|query)\\b"
+        },
+        {
+          "name": "variable.parameter.aip",
+          "match": "\\$[a-zA-Z_][a-zA-Z0-9_.]*"
+        },
+        {
+          "name": "variable.language.aip",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "string.quoted.double.aip",
+          "match": "\"[^\"]*\""
+        },
+        {
+          "name": "constant.numeric.aip",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        },
+        {
+          "name": "support.type.aip",
+          "match": "\\b(uuid|text|int|float|bool|timestamp|json|enum|required|unique|hashed|pk|auto|default|index)\\b"
+        }
+      ]
+    },
+    "model": {
+      "name": "meta.model.aip",
+      "begin": "^model\\s+(\\w+)\\s*\\{",
+      "beginCaptures": { "1": { "name": "entity.name.type.aip" } },
+      "end": "^\\}",
+      "patterns": [{ "include": "#directive" }]
+    },
+    "api": {
+      "name": "meta.api.aip",
+      "begin": "^api\\s+(GET|POST|PUT|PATCH|DELETE)\\s+(\\S+)\\s*\\{",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.http-method.aip" },
+        "2": { "name": "string.other.path.aip" }
+      },
+      "end": "^\\}",
+      "patterns": [{ "include": "#directive" }]
+    },
+    "page": {
+      "name": "meta.page.aip",
+      "match": "^%(\\w+)\\s+(\\w+)\\s+(\\S+)",
+      "captures": {
+        "1": { "name": "entity.name.section.aip" },
+        "2": { "name": "support.class.aip" },
+        "3": { "name": "string.other.path.aip" }
+      }
+    },
+    "block": {
+      "name": "meta.block.aip",
+      "match": "^(nav|hero|stats|row\\d*|sect|table|form|pricing|faq|testimonial|gallery|btn|select|if|each|card|cols|divider|badge|spacer|foot)\\b",
+      "captures": { "1": { "name": "support.function.block.aip" } }
+    }
+  }
+}

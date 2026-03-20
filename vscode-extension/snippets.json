@@ -1,0 +1,87 @@
+{
+  "Full-stack app skeleton": {
+    "prefix": "aip-app",
+    "body": [
+      "~env JWT_SECRET required",
+      "~db sqlite ./${1:app}.db",
+      "~auth jwt \\$JWT_SECRET expire=7d",
+      "~use helmet",
+      "~use rate-limit max=100 window=60s",
+      "",
+      "model ${2:User} {",
+      "  id       : uuid : pk auto",
+      "  nome     : text : required",
+      "  email    : text : required unique",
+      "  password : text : required hashed",
+      "  ~soft-delete",
+      "}",
+      "",
+      "api POST /api/auth/register {",
+      "  ~validate nome required | email required email | password min=8",
+      "  ~unique ${2:User} email \\$body.email | 409",
+      "  ~hash password",
+      "  insert ${2:User}(\\$body)",
+      "  return jwt(\\$inserted) 201",
+      "}",
+      "",
+      "api POST /api/auth/login {",
+      "  \\$user = ${2:User}.findBy(email=\\$body.email)",
+      "  ~check password \\$body.password \\$user.password | 401",
+      "  return jwt(\\$user) 200",
+      "}",
+      "",
+      "api GET /api/me { ~guard auth",
+      "  return \\$auth.user }",
+      "",
+      "%home dark /",
+      "~theme accent=#6366f1 radius=1rem font=Inter",
+      "nav{${3:App}>/login:Entrar}",
+      "hero{${3:App}|${4:Descrição.}>/registro:Começar} animate:blur-in",
+      "foot{© 2025 ${3:App}}"
+    ],
+    "description": "Full-stack aiplang app skeleton"
+  },
+  "Model": {
+    "prefix": "aip-model",
+    "body": [
+      "model ${1:Nome} {",
+      "  id     : uuid : pk auto",
+      "  ${2:campo} : text : required",
+      "  status : enum : ativo,inativo : default=ativo",
+      "  ~soft-delete",
+      "}"
+    ],
+    "description": "aiplang model block"
+  },
+  "API route": {
+    "prefix": "aip-api",
+    "body": [
+      "api ${1|GET,POST,PUT,DELETE|} /api/${2:path} {",
+      "  ~guard ${3:auth}",
+      "  ${4:return ${1:Model}.all()}",
+      "}"
+    ],
+    "description": "aiplang API route"
+  },
+  "Page": {
+    "prefix": "aip-page",
+    "body": [
+      "%${1:id} dark /${1:id}",
+      "~theme accent=#6366f1 radius=1rem font=Inter",
+      "@${2:data} = []",
+      "~mount GET /api/${2:data} => @${2:data}",
+      "nav{App}",
+      "hero{${3:Título}|${4:Subtítulo.}}",
+      "table @${2:data} { ${5:Campo}:${6:field} | empty: Nenhum item. }",
+      "foot{© 2025}"
+    ],
+    "description": "aiplang page"
+  },
+  "Form": {
+    "prefix": "aip-form",
+    "body": [
+      "form POST /api/${1:endpoint} => @${2:list}.push(\\$result) { ${3:Campo}:text:${4:placeholder} }"
+    ],
+    "description": "aiplang form"
+  }
+}

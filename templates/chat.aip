@@ -1,0 +1,127 @@
+# Chat simples com polling — aiplang template
+# Use: npx aiplang start chat.aip
+# Demonstra: polling via ~interval, realtime UX sem WebSocket
+# Para WebSocket real, adicione ~realtime
+
+~env JWT_SECRET required
+~db sqlite ./chat.db
+~auth jwt $JWT_SECRET expire=24h
+~use helmet
+~use rate-limit max=200 window=60s
+
+model User {
+  id     : uuid : pk auto
+  nome   : text : required
+  email  : text : required unique
+  password : text : required hashed
+  avatar : text
+  online : bool : default=false
+}
+
+model Canal {
+  id   : uuid : pk auto
+  nome : text : required unique
+  tipo : enum : geral,privado : default=geral
+}
+
+model Mensagem {
+  id     : uuid : pk auto
+  corpo  : text : required
+  ~belongs Canal
+  ~belongs User
+}
+
+# ── Auth ─────────────────────────────────────────────────────────
+
+api POST /api/auth/registro {
+  ~validate nome required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api GET /api/me { ~guard auth
+  return $auth.user }
+
+# ── Canais ───────────────────────────────────────────────────────
+
+api GET /api/canais {
+  return Canal.all(order=nome asc)
+}
+
+api POST /api/canais {
+  ~guard auth
+  ~validate nome required
+  ~unique Canal nome $body.nome | 409
+  insert Canal($body)
+  return $inserted 201
+}
+
+# ── Mensagens ────────────────────────────────────────────────────
+
+api GET /api/canais/:id/mensagens {
+  ~guard auth
+  ~query limit=50
+  # Retorna últimas 50 mensagens do canal
+  return Mensagem.all(order=created_at desc)
+}
+
+api POST /api/canais/:id/mensagens {
+  ~guard auth
+  ~validate corpo required
+  ~rateLimit $auth.user.id 10 30
+  insert Mensagem($body)
+  return $inserted 201
+}
+
+api DELETE /api/mensagens/:id {
+  ~guard auth
+  delete Mensagem($id)
+}
+
+api GET /api/online {
+  return User.count()
+}
+
+# ── Páginas ──────────────────────────────────────────────────────
+
+%login dark /
+~theme accent=#6366f1 radius=1rem font=Inter
+nav{ChatAI}
+hero{Chat em tempo real|Converse com sua equipe.>/registro:Criar conta}
+form POST /api/auth/login => redirect /chat { Email:email | Senha:password }
+foot{© 2025 ChatAI}
+
+---
+
+%registro dark /registro
+~theme accent=#6366f1 radius=1rem font=Inter
+nav{ChatAI>/login:Entrar}
+hero{Criar conta|Grátis para sempre.}
+form POST /api/auth/registro => redirect /chat { Nome:text | Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%chat dark /chat
+~theme accent=#6366f1 radius=1rem font=Inter surface=#0f172a
+@mensagens = []
+@canais = []
+@online = 0
+~mount GET /api/canais => @canais
+~mount GET /api/canais/1/mensagens => @mensagens
+~mount GET /api/online => @online
+~interval 3000 GET /api/canais/1/mensagens => @mensagens
+~interval 15000 GET /api/online => @online
+nav{ChatAI — @online online>/logout:Sair}
+sect{Mensagens}
+table @mensagens { De:user_id | Mensagem:corpo | empty: Seja o primeiro a enviar uma mensagem! }
+form POST /api/canais/1/mensagens => @mensagens.push($result) { Mensagem:text:Digite sua mensagem... }
+foot{ChatAI — polling a cada 3s}

@@ -1,0 +1,160 @@
+# E-commerce mínimo com Stripe — aiplang template
+# Use: npx aiplang start ecommerce.aip
+# Demonstra: Stripe checkout, carrinho via estado, produtos, pedidos
+
+~env JWT_SECRET required
+~env STRIPE_SECRET_KEY required
+~env STRIPE_WEBHOOK_SECRET required
+~db sqlite ./shop.db
+~auth jwt $JWT_SECRET expire=7d
+~stripe $STRIPE_SECRET_KEY webhook=$STRIPE_WEBHOOK_SECRET success=/pedido/confirmado cancel=/carrinho
+~admin /admin
+~use helmet
+~use rate-limit max=100 window=60s
+
+model User {
+  id       : uuid : pk auto
+  nome     : text : required
+  email    : text : required unique
+  password : text : required hashed
+  ~soft-delete
+}
+
+model Produto {
+  id        : uuid  : pk auto
+  nome      : text  : required
+  descricao : text  : required
+  preco     : float : required
+  imagem    : text
+  estoque   : int   : default=0
+  ativo     : bool  : default=true
+  stripe_id : text
+}
+
+model Pedido {
+  id     : uuid : pk auto
+  total  : float : required
+  status : enum : pendente,pago,enviado,cancelado : default=pendente
+  ~belongs User
+}
+
+# ── Auth ─────────────────────────────────────────────────────────
+
+api POST /api/auth/registro {
+  ~validate nome required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api GET /api/me { ~guard auth
+  return $auth.user }
+
+# ── Produtos ─────────────────────────────────────────────────────
+
+api GET /api/produtos {
+  ~query page=1
+  ~cache produtos:list 120
+  return Produto.paginate($page, 12)
+}
+
+api POST /api/produtos {
+  ~guard admin
+  ~validate nome required | preco required numeric | estoque required numeric
+  insert Produto($body)
+  ~cache:clear produtos:
+  return $inserted 201
+}
+
+api GET /api/stats {
+  return {produtos: Produto.count(), pedidos: Pedido.count(), usuarios: User.count()}
+}
+
+# ── Checkout Stripe ───────────────────────────────────────────────
+# POST /api/stripe/checkout — gerado automaticamente pelo ~stripe
+# GET  /api/stripe/subscription — status da assinatura
+# POST /api/stripe/webhook — webhooks automáticos
+
+# ── Pedidos ──────────────────────────────────────────────────────
+
+api GET /api/pedidos {
+  ~guard auth
+  return Pedido.all(order=created_at desc)
+}
+
+api GET /api/pedidos/:id {
+  ~guard auth
+  return Pedido.find($params.id)
+}
+
+# ── Páginas ──────────────────────────────────────────────────────
+
+%home dark /
+~theme accent=#f59e0b radius=1rem font=Inter
+@produtos = []
+@stats = {}
+~mount GET /api/produtos => @produtos
+~mount GET /api/stats => @stats
+nav{ShopAI>/produtos:Produtos>/carrinho:Carrinho>/login:Entrar}
+hero{Tecnologia de ponta|Frete grátis acima de R$299.>/produtos:Ver produtos} animate:blur-in
+stats{@stats.produtos:Produtos|@stats.pedidos:Pedidos|4.9⭐:Avaliação}
+row3{truck>Frete Grátis>Compras acima de R$299.|card>12x sem juros>Cartão de crédito.|bag>Troca fácil>30 dias garantidos.} animate:stagger
+foot{© 2025 ShopAI>/termos:Termos>/privacidade:Privacidade}
+
+---
+
+%produtos dark /produtos
+~theme accent=#f59e0b radius=1rem font=Inter
+@produtos = []
+@stats = {}
+~mount GET /api/produtos => @produtos
+nav{ShopAI>/carrinho:Carrinho>/login:Entrar}
+hero{Nossos Produtos|Qualidade garantida.}
+stats{@stats.produtos:Produtos disponíveis}
+table @produtos.data { Nome:nome | Preço:preco | Estoque:estoque | empty: Nenhum produto. }
+foot{ShopAI}
+
+---
+
+%login dark /login
+~theme accent=#f59e0b radius=1rem font=Inter
+nav{ShopAI>/registro:Criar conta}
+form POST /api/auth/login => redirect /conta { Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%registro dark /registro
+~theme accent=#f59e0b radius=1rem font=Inter
+nav{ShopAI>/login:Entrar}
+hero{Criar conta|Compre com segurança.}
+form POST /api/auth/registro => redirect /conta { Nome:text | Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%conta dark /conta
+~theme accent=#f59e0b radius=1rem font=Inter
+@pedidos = []
+~mount GET /api/pedidos => @pedidos
+nav{ShopAI>/produtos:Produtos>/logout:Sair}
+sect{Meus Pedidos}
+table @pedidos { ID:id | Total:total | Status:status | empty: Nenhum pedido ainda. }
+sect{Fazer checkout}
+form POST /api/stripe/checkout => redirect /pedido/confirmado { Plano:select:Compra única,Assinatura mensal }
+foot{ShopAI}
+
+---
+
+%confirmado dark /pedido/confirmado
+~theme accent=#f59e0b radius=1rem font=Inter
+nav{ShopAI}
+hero{Pedido confirmado! 🎉|Obrigado pela sua compra. Você receberá um email de confirmação.>/conta:Ver meus pedidos}
+foot{© 2025 ShopAI}

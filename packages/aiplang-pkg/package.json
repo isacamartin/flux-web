@@ -1,6 +1,6 @@
 {
   "name": "aiplang",
-  "version": "2.8.0",
+  "version": "2.9.1",
   "description": "AI-first web language. One .aip file = complete app. Frontend + backend + database + auth.",
   "keywords": [
     "aiplang",
@@ -43,7 +43,9 @@
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
     "nodemailer": "^8.0.3",
+    "pg": "^8.11.0",
     "sql.js": "^1.10.3",
-    "stripe": "^14.0.0"
+    "stripe": "^14.0.0",
+    "ws": "^8.16.0"
   }
 }

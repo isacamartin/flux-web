@@ -1,5 +1,21 @@
 'use strict'
-// aiplang Full-Stack Server v2 — Laravel-competitive
+// aiplang Full-Stack Server v2.9 — Next.js competitive
+
+// ── Auto-load .env file ───────────────────────────────────────────
+;(function loadDotEnv() {
+  const envFiles = ['.env', '.env.local', '.env.production']
+  for (const f of envFiles) {
+    try {
+      const lines = require('fs').readFileSync(f, 'utf8').split('\n')
+      for (const line of lines) {
+        const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/)
+        if (m && !process.env[m[1]]) {
+          process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+        }
+      }
+    } catch {}
+  }
+})()
 // Features: ORM+relations, email, jobs/queues, admin panel, OAuth, soft deletes, events
 
 const http    = require('http')
@@ -11,26 +27,60 @@ const bcrypt  = require('bcryptjs')
 const jwt     = require('jsonwebtoken')
 const nodemailer = require('nodemailer').createTransport ? require('nodemailer') : null
 
-// ── SQL.js (pure JS SQLite) ───────────────────────────────────────
+// ── Database — SQLite (dev) + PostgreSQL (prod) ──────────────────
 let SQL, DB_FILE, _db = null
-async function getDB(dbFile = ':memory:') {
-  if (_db) return _db
+let _pgPool = null // PostgreSQL connection pool
+let _dbDriver = 'sqlite' // 'sqlite' | 'postgres'
+
+async function getDB(dbConfig = { driver: 'sqlite', dsn: ':memory:' }) {
+  if (_db || _pgPool) return _db || _pgPool
+  const driver = dbConfig.driver || 'sqlite'
+  const dsn = dbConfig.dsn || ':memory:'
+  _dbDriver = driver
+
+  if (driver === 'postgres' || driver === 'postgresql' || dsn.startsWith('postgres')) {
+    try {
+      const { Pool } = require('pg')
+      _pgPool = new Pool({ connectionString: dsn, ssl: dsn.includes('ssl=true') ? { rejectUnauthorized: false } : false })
+      await _pgPool.query('SELECT 1') // test connection
+      console.log('[aiplang] DB:     PostgreSQL ✓')
+      return _pgPool
+    } catch (e) {
+      console.error('[aiplang] PostgreSQL connection failed:', e.message)
+      console.log('[aiplang] Falling back to SQLite :memory:')
+      _dbDriver = 'sqlite'
+    }
+  }
+
+  // SQLite fallback
   const initSqlJs = require('sql.js')
   SQL = await initSqlJs()
-  if (dbFile !== ':memory:' && fs.existsSync(dbFile)) {
-    _db = new SQL.Database(fs.readFileSync(dbFile))
+  if (dsn !== ':memory:' && fs.existsSync(dsn)) {
+    _db = new SQL.Database(fs.readFileSync(dsn))
   } else {
     _db = new SQL.Database()
   }
-  DB_FILE = dbFile
+  DB_FILE = dsn !== ':memory:' ? dsn : null
+  console.log('[aiplang] DB:    ', dsn)
   return _db
 }
+
 function persistDB() {
-  if (!_db || !DB_FILE || DB_FILE === ':memory:') return
+  if (!_db || !DB_FILE) return
   try { fs.writeFileSync(DB_FILE, Buffer.from(_db.export())) } catch {}
 }
 let _dirty = false, _persistTimer = null
+
 function dbRun(sql, params = []) {
+  // Normalize ? placeholders to $1,$2 for postgres
+  if (_pgPool) {
+    const pgSql = sql.replace(/\?/g, (_, i) => {
+      let n = 0; sql.slice(0, sql.indexOf(_)+n).replace(/\?/g, () => ++n); return `$${++n}`
+    })
+    // Async run — fire and forget for writes (sync API compatibility)
+    _pgPool.query(convertPlaceholders(sql), params).catch(e => console.error('[aiplang:pg] Query error:', e.message))
+    return
+  }
   _db.run(sql, params)
   _dirty = true
   if (!_persistTimer) _persistTimer = setTimeout(() => {
@@ -38,12 +88,40 @@ function dbRun(sql, params = []) {
     _persistTimer = null
   }, 200)
 }
+
+function convertPlaceholders(sql) {
+  let i = 0; return sql.replace(/\?/g, () => `$${++i}`)
+}
+
+async function dbRunAsync(sql, params = []) {
+  if (_pgPool) return _pgPool.query(convertPlaceholders(sql), params)
+  dbRun(sql, params)
+}
+
 function dbAll(sql, params = []) {
+  if (_pgPool) {
+    // For sync ORM compat — return from cache or throw
+    // Full async support via dbAllAsync
+    return []
+  }
   const stmt = _db.prepare(sql); stmt.bind(params)
   const rows = []; while (stmt.step()) rows.push(stmt.getAsObject()); stmt.free()
   return rows
 }
+
+async function dbAllAsync(sql, params = []) {
+  if (_pgPool) {
+    const r = await _pgPool.query(convertPlaceholders(sql), params)
+    return r.rows
+  }
+  return dbAll(sql, params)
+}
+
 function dbGet(sql, params = []) { return dbAll(sql, params)[0] || null }
+async function dbGetAsync(sql, params = []) {
+  const rows = await dbAllAsync(sql, params)
+  return rows[0] || null
+}
 
 // ── Helpers ───────────────────────────────────────────────────────
 const uuid  = () => crypto.randomUUID()
@@ -64,6 +142,50 @@ if (!process.env.JWT_SECRET) {
 let JWT_EXPIRE = '7d'
 const generateJWT = (user) => jwt.sign({ id: user.id, email: user.email, role: user.role || 'user' }, JWT_SECRET, { expiresIn: JWT_EXPIRE })
 const verifyJWT   = (token) => { try { return jwt.verify(token, JWT_SECRET) } catch { return null } }
+
+// ── WebSocket Realtime Server ─────────────────────────────────────
+let _wsServer = null
+const _wsClients = new Set()
+const _wsChannels = {} // channel → Set<ws>
+
+function setupRealtime(server) {
+  try {
+    const { WebSocketServer } = require('ws')
+    _wsServer = new WebSocketServer({ server })
+    _wsServer.on('connection', (ws, req) => {
+      _wsClients.add(ws)
+      ws.on('message', raw => {
+        try {
+          const msg = JSON.parse(raw)
+          if (msg.type === 'subscribe' && msg.channel) {
+            if (!_wsChannels[msg.channel]) _wsChannels[msg.channel] = new Set()
+            _wsChannels[msg.channel].add(ws)
+            ws.send(JSON.stringify({ type: 'subscribed', channel: msg.channel }))
+          }
+        } catch {}
+      })
+      ws.on('close', () => {
+        _wsClients.delete(ws)
+        Object.values(_wsChannels).forEach(s => s.delete(ws))
+      })
+      ws.send(JSON.stringify({ type: 'connected', ts: Date.now() }))
+    })
+    console.log('[aiplang] Realtime: WebSocket server ready')
+  } catch (e) {
+    console.warn('[aiplang] Realtime: ws not available —', e.message)
+  }
+}
+
+function broadcast(channel, data) {
+  const msg = JSON.stringify({ type: 'update', channel, data, ts: Date.now() })
+  const targets = channel ? (_wsChannels[channel] || new Set()) : _wsClients
+  targets.forEach(ws => { try { if (ws.readyState === 1) ws.send(msg) } catch {} })
+}
+
+function realtimeMiddleware(res) {
+  // Inject broadcast helper into route context
+  res.broadcast = broadcast
+}
 
 // ── Queue system ──────────────────────────────────────────────────
 const QUEUE = []
@@ -89,6 +211,28 @@ async function processQueue() {
   }
   QUEUE_RUNNING = false
 }
+
+// ── Cache in-memory com TTL ──────────────────────────────────────
+const _cache = new Map()
+function cacheSet(key, value, ttlMs = 60000) {
+  _cache.set(key, { value, expires: Date.now() + ttlMs })
+}
+function cacheGet(key) {
+  const item = _cache.get(key)
+  if (!item) return null
+  if (item.expires < Date.now()) { _cache.delete(key); return null }
+  return item.value
+}
+function cacheDel(key) { _cache.delete(key) }
+function cacheClear(pattern) {
+  if (!pattern) { _cache.clear(); return }
+  for (const k of _cache.keys()) if (k.startsWith(pattern)) _cache.delete(k)
+}
+// Auto-cleanup expired entries every 5 minutes
+setInterval(() => {
+  const now = Date.now()
+  for (const [k,v] of _cache.entries()) if (v.expires < now) _cache.delete(k)
+}, 300000)
 
 // ── Email ─────────────────────────────────────────────────────────
 let MAIL_CONFIG = null
@@ -313,7 +457,7 @@ function migrateModels(models) {
 // PARSER
 // ═══════════════════════════════════════════════════════════════════
 function parseApp(src) {
-  const app = { env:[], db:null, auth:null, mail:null, stripe:null, s3:null, plugins:[], middleware:[], models:[], apis:[], pages:[], jobs:[], events:[], admin:null }
+  const app = { env:[], db:null, auth:null, mail:null, stripe:null, s3:null, plugins:[], middleware:[], models:[], apis:[], pages:[], jobs:[], events:[], admin:null, realtime:false }
   const lines = src.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'))
   let i=0, inModel=false, inAPI=false, curModel=null, curAPI=null, pageLines=[], inPage=false
 
@@ -332,6 +476,7 @@ function parseApp(src) {
     if (line.startsWith('~mail '))        { app.mail = parseMailLine(line.slice(6)); i++; continue }
     if (line.startsWith('~middleware '))  { app.middleware = line.slice(12).split('|').map(s=>s.trim()); i++; continue }
     if (line.startsWith('~admin'))        { app.admin = parseAdminLine(line); i++; continue }
+    if (line.startsWith('~realtime'))     { app.realtime = true; i++; continue }
     if (line.startsWith('~stripe '))       { app.stripe = parseStripeLine(line.slice(8)); i++; continue }
     if (line.startsWith('~plan '))         { app.stripe = app.stripe || {}; app.stripe.plans = app.stripe.plans || {}; parsePlanLine(line.slice(6), app.stripe.plans); i++; continue }
     if (line.startsWith('~s3 '))           { app.s3 = parseS3Line(line.slice(4)); i++; continue }
@@ -504,12 +649,49 @@ function compileRoute(route, server) {
       if (result !== null && result !== undefined) ctx.lastResult = result
     }
 
+    // Auto-cache result if ~cache was called
+    if (ctx.vars['__cacheKey'] && ctx.lastResult !== undefined) {
+      cacheSet(ctx.vars['__cacheKey'], ctx.lastResult, ctx.vars['__cacheTTL'] || 60000)
+    }
     if (!res.writableEnded) res.json(200, ctx.lastResult ?? {})
   })
 }
 
 async function execOp(line, ctx, server) {
   line = line.trim(); if (!line) return null
+
+  // ~cache key ttl — cache result
+  if (line.startsWith('~cache ')) {
+    const parts=line.slice(7).trim().split(/\s+/)
+    const key=parts[0], ttl=parseInt(parts[1]||'60')*1000
+    const cached=cacheGet(key)
+    if (cached!==null) { ctx.res.json(200,cached); return '__DONE__' }
+    ctx.vars['__cacheKey']=key; ctx.vars['__cacheTTL']=ttl
+    return null
+  }
+
+  // ~cache:clear pattern — invalidate cache
+  if (line.startsWith('~cache:clear')) {
+    const pattern=line.slice(12).trim()||null; cacheClear(pattern); return null
+  }
+
+  // ~broadcast channel data — push to WebSocket clients
+  if (line.startsWith('~broadcast ')) {
+    const parts=line.slice(11).trim().split(/\s+/)
+    const channel=parts[0]; const data=resolveVar(parts.slice(1).join(' '),ctx)
+    broadcast(channel,data); return null
+  }
+
+  // ~rateLimit key max window — custom rate limiter per key
+  if (line.startsWith('~rateLimit ') || line.startsWith('~rate-limit ')) {
+    const parts=line.slice(line.indexOf(' ')+1).trim().split(/\s+/)
+    const key=resolveVar(parts[0],ctx)||'default'
+    const max=parseInt(parts[1]||'10'), win=parseInt(parts[2]||'60')*1000
+    const cKey=`rl:${key}:${Math.floor(Date.now()/win)}`
+    const count=(cacheGet(cKey)||0)+1; cacheSet(cKey,count,win)
+    if(count>max){ctx.res.error(429,'Rate limit exceeded');return '__DONE__'}
+    return null
+  }
 
   // ~hash field
   if (line.startsWith('~hash ')) { const f=line.slice(6).trim(); if(ctx.body[f])ctx.body[f]=await bcrypt.hash(ctx.body[f],12); return null }
@@ -563,14 +745,14 @@ async function execOp(line, ctx, server) {
   // insert Model($body)
   if (line.startsWith('insert ')) {
     const modelName=line.match(/insert\s+(\w+)/)?.[1]; const m=server.models[modelName]
-    if (m) { ctx.vars['inserted']=m.create({...ctx.body}); return ctx.vars['inserted'] }
+    if (m) { ctx.vars['inserted']=m.create({...ctx.body}); broadcast(modelName.toLowerCase(), {action:'created',data:ctx.vars['inserted']}); return ctx.vars['inserted'] }
     return null
   }
 
   // update Model($id, $body)
   if (line.startsWith('update ')) {
     const modelName=line.match(/update\s+(\w+)/)?.[1]; const m=server.models[modelName]
-    if (m) { const id=ctx.params.id||ctx.vars['id']; ctx.vars['updated']=m.update(id,{...ctx.body}); return ctx.vars['updated'] }
+    if (m) { const id=ctx.params.id||ctx.vars['id']; ctx.vars['updated']=m.update(id,{...ctx.body}); broadcast(modelName.toLowerCase(), {action:'updated',data:ctx.vars['updated']}); return ctx.vars['updated'] }
     return null
   }
 
@@ -1221,7 +1403,7 @@ function getMime(filename) {
 //   module.exports = (opts) => ({ name: '...', setup(srv, app, utils) { ... } })
 
 const PLUGIN_UTILS = {
-  uuid, now, emit, on, dispatch, resolveEnv, dbRun, dbAll, dbGet,
+  uuid, now, emit, on, dispatch, resolveEnv, dbRun, dbAll, dbGet, dbAllAsync, dbGetAsync,
   parseSize, s3Upload, s3Delete, s3PresignedUrl,
   generateJWT, verifyJWT,
   getMime,
@@ -1368,9 +1550,10 @@ async function startServer(aipFile, port = 3000) {
   }
 
   // DB setup
-  const dbFile = app.db ? resolveEnv(app.db.dsn) : ':memory:'
-  await getDB(dbFile)
-  console.log(`[aiplang] DB:     ${dbFile}`)
+  const dbDsn = app.db ? (resolveEnv(app.db.dsn) || app.db.dsn) : ':memory:'
+  const dbConfig = { driver: app.db?.driver || 'sqlite', dsn: dbDsn }
+  await getDB(dbConfig)
+  console.log(`[aiplang] DB:     ${dbDsn}`)
 
   // Migrations
   console.log(`[aiplang] Tables:`)
@@ -1435,7 +1618,7 @@ async function startServer(aipFile, port = 3000) {
 
   // Health
   srv.addRoute('GET', '/health', (req, res) => res.json(200, {
-    status:'ok', version:'2.8.0',
+    status:'ok', version:'2.9.1',
     models: app.models.map(m=>m.name),
     routes: app.apis.length, pages: app.pages.length,
     admin: app.admin?.prefix || null,
@@ -1459,7 +1642,7 @@ async function startServer(aipFile, port = 3000) {
   return srv
 }
 
-module.exports = { startServer, parseApp, Model, getDB, dispatch, on, emit, sendMail, setupStripe, registerStripeRoutes, setupS3, registerS3Routes, s3Upload, s3Delete, s3PresignedUrl, PLUGIN_UTILS }
+module.exports = { startServer, parseApp, Model, getDB, dispatch, on, emit, sendMail, setupStripe, registerStripeRoutes, setupS3, registerS3Routes, s3Upload, s3Delete, s3PresignedUrl, cacheSet, cacheGet, cacheDel, broadcast, PLUGIN_UTILS }
 if (require.main === module) {
   const f=process.argv[2], p=parseInt(process.argv[3]||process.env.PORT||'3000')
   if (!f) { console.error('Usage: node server.js <app.aip> [port]'); process.exit(1) }

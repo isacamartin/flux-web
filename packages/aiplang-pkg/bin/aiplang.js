@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.8.0'
+const VERSION     = '2.9.1'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -470,7 +470,19 @@ if (cmd==='build') {
     fs.readdirSync(input).filter(f=>f.endsWith('.aip')).forEach(f=>files.push(path.join(input,f)))
   } else if(input.endsWith('.aip')&&fs.existsSync(input)){ files.push(input) }
   if(!files.length){console.error(`\n  ✗  No .aip files in: ${input}\n`);process.exit(1)}
-  const src=files.map(f=>fs.readFileSync(f,'utf8')).join('\n---\n')
+  // Resolve ~import directives recursively
+  function resolveImports(content, baseDir, seen=new Set()) {
+    return content.replace(/^~import\s+["']?([^"'\n]+)["']?$/mg, (_, importPath) => {
+      const resolved = path.resolve(baseDir, importPath.trim())
+      if (seen.has(resolved)) return '' // circular import protection
+      try {
+        seen.add(resolved)
+        const imported = fs.readFileSync(resolved, 'utf8')
+        return resolveImports(imported, path.dirname(resolved), seen)
+      } catch { return `# ~import failed: ${importPath}` }
+    })
+  }
+  const src=files.map(f=>resolveImports(fs.readFileSync(f,'utf8'), path.dirname(f))).join('\n---\n')
   const pages=parsePages(src)
   if(!pages.length){console.error('\n  ✗  No pages found.\n');process.exit(1)}
   fs.mkdirSync(outDir,{recursive:true})

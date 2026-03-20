@@ -1,0 +1,162 @@
+# Blog com comentários — aiplang template
+# Use: npx aiplang start blog.aip
+# Demonstra: auth, relações (Post → Comentario), paginação, cache
+
+~env JWT_SECRET required
+~db sqlite ./blog.db
+~auth jwt $JWT_SECRET expire=7d
+~admin /admin
+~use helmet
+~use rate-limit max=100 window=60s
+
+# ── Models ───────────────────────────────────────────────────────
+
+model User {
+  id       : uuid : pk auto
+  nome     : text : required
+  email    : text : required unique
+  password : text : required hashed
+  bio      : text
+  role     : enum : leitor,autor,admin : default=leitor
+  ~soft-delete
+}
+
+model Post {
+  id          : uuid : pk auto
+  titulo      : text : required
+  slug        : text : required unique
+  corpo       : text : required
+  publicado   : bool : default=false
+  visualizacoes : int : default=0
+  ~belongs User
+  ~soft-delete
+}
+
+model Comentario {
+  id      : uuid : pk auto
+  corpo   : text : required
+  ~belongs Post
+  ~belongs User
+}
+
+# ── Auth ─────────────────────────────────────────────────────────
+
+api POST /api/auth/registro {
+  ~validate nome required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api GET /api/me {
+  ~guard auth
+  return $auth.user
+}
+
+# ── Posts ────────────────────────────────────────────────────────
+
+api GET /api/posts {
+  ~query page=1 limit=10
+  ~cache posts:list:$page 60
+  return Post.paginate($page, $limit)
+}
+
+api GET /api/posts/:id {
+  $post = Post.find($params.id)
+  return $post
+}
+
+api POST /api/posts {
+  ~guard auth
+  ~validate titulo required | slug required | corpo required
+  ~unique Post slug $body.slug | 409
+  insert Post($body)
+  ~cache:clear posts:
+  return $inserted 201
+}
+
+api PUT /api/posts/:id {
+  ~guard auth
+  update Post($id, $body)
+  ~cache:clear posts:
+  return $updated
+}
+
+api DELETE /api/posts/:id {
+  ~guard admin
+  delete Post($id)
+  ~cache:clear posts:
+}
+
+# ── Comentários ──────────────────────────────────────────────────
+
+api GET /api/posts/:id/comentarios {
+  return Comentario.all(order=created_at asc)
+}
+
+api POST /api/posts/:id/comentarios {
+  ~guard auth
+  ~validate corpo required
+  insert Comentario($body)
+  return $inserted 201
+}
+
+api DELETE /api/comentarios/:id {
+  ~guard auth
+  delete Comentario($id)
+}
+
+api GET /api/stats {
+  return {posts: Post.count(), users: User.count(), comentarios: Comentario.count()}
+}
+
+# ── Páginas Frontend ─────────────────────────────────────────────
+
+%home dark /
+~theme accent=#10b981 radius=1rem font=Inter
+@posts = []
+@stats = {}
+~mount GET /api/posts => @posts
+~mount GET /api/stats => @stats
+nav{MyBlog>/novo:Escrever>/login:Entrar}
+hero{Stories que importam|Artigos de tecnologia, carreira e vida.} animate:blur-in
+stats{@stats.posts:Artigos|@stats.users:Autores|@stats.comentarios:Comentários}
+sect{Posts recentes}
+table @posts.data { Título:titulo | Autor:user_id | Publicado:publicado | empty: Nenhum post ainda. }
+foot{© 2025 MyBlog>/about:Sobre}
+
+---
+
+%login dark /login
+nav{MyBlog>/registro:Criar conta}
+hero{Bem-vindo de volta}
+form POST /api/auth/login => redirect /dashboard { Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%registro dark /registro
+nav{MyBlog>/login:Entrar}
+hero{Crie sua conta|Grátis, sem cartão.}
+form POST /api/auth/registro => redirect /dashboard { Nome:text | Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%dashboard dark /dashboard
+@posts = []
+~mount GET /api/posts => @posts
+~interval 30000 GET /api/posts => @posts
+nav{MyBlog>/novo:Novo post>/logout:Sair}
+stats{}
+sect{Meus posts}
+table @posts.data { Título:titulo | Status:publicado | delete DELETE /api/posts/{id} | empty: Nenhum post. }
+form POST /api/posts => @posts.data.push($result) { Título:text | Slug:text:meu-primeiro-post | Corpo:textarea:Escreva seu artigo aqui }
+foot{MyBlog Dashboard}

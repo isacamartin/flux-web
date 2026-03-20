@@ -1,0 +1,135 @@
+# Dashboard de Analytics — aiplang template
+# Use: npx aiplang start analytics.aip
+# Demonstra: cache pesado, stats complexas, múltiplos modelos, admin
+
+~env JWT_SECRET required
+~db sqlite ./analytics.db
+~auth jwt $JWT_SECRET expire=8h
+~admin /admin
+~use helmet
+~use rate-limit max=300 window=60s
+~use compression
+~use logger format=tiny
+
+model User {
+  id       : uuid : pk auto
+  nome     : text : required
+  email    : text : required unique
+  password : text : required hashed
+  role     : enum : viewer,editor,admin : default=viewer
+  plano    : enum : free,pro,enterprise : default=free
+  ~soft-delete
+}
+
+model Evento {
+  id         : uuid : pk auto
+  tipo       : enum : pageview,click,conversion,signup,purchase : default=pageview
+  pagina     : text : required
+  referrer   : text
+  valor      : float : default=0
+  ~belongs User
+}
+
+model Campanha {
+  id        : uuid : pk auto
+  nome      : text : required
+  fonte     : enum : google,meta,email,organic : default=organic
+  orcamento : float : default=0
+  ativo     : bool  : default=true
+}
+
+# ── Auth ─────────────────────────────────────────────────────────
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api POST /api/auth/registro {
+  ~validate nome required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api GET /api/me { ~guard auth
+  return $auth.user }
+
+# ── Tracking ─────────────────────────────────────────────────────
+
+api POST /api/track {
+  ~validate tipo required | pagina required
+  insert Evento($body)
+  return {ok: true} 201
+}
+
+# ── Stats — com cache agressivo ───────────────────────────────────
+
+api GET /api/stats/overview {
+  ~guard auth
+  ~cache analytics:overview 300
+  return {
+    eventos: Evento.count(),
+    usuarios: User.count(),
+    campanhas: Campanha.count(),
+    conversoes: Evento.count(),
+    receita: Evento.sum(valor)
+  }
+}
+
+api GET /api/stats/eventos {
+  ~guard auth
+  ~cache analytics:eventos 120
+  ~query limit=100
+  return Evento.all(order=created_at desc)
+}
+
+api GET /api/campanhas {
+  ~guard auth
+  return Campanha.all(order=created_at desc)
+}
+
+api POST /api/campanhas {
+  ~guard auth
+  ~validate nome required | fonte required
+  insert Campanha($body)
+  ~cache:clear analytics:
+  return $inserted 201
+}
+
+api GET /api/usuarios { ~guard admin
+  ~query page=1
+  return User.paginate($page, 20) }
+
+# ── Páginas ──────────────────────────────────────────────────────
+
+%login dark /
+~theme accent=#0ea5e9 radius=.875rem font=Inter bg=#030712
+nav{AnalyticsAI}
+hero{Analytics em tempo real|Entenda seus usuários e escale.>/registro:Começar grátis} animate:blur-in
+row3{chart>Dados em tempo real>Eventos trackeados instantaneamente.|globe>Multi-canal>Google, Meta, Email, Orgânico.|bell>Alertas>Seja notificado de anomalias.} animate:stagger
+form POST /api/auth/login => redirect /dashboard { Email:email | Senha:password }
+foot{© 2025 AnalyticsAI}
+
+---
+
+%dashboard dark /dashboard
+~theme accent=#0ea5e9 radius=.875rem font=Inter bg=#030712
+@overview = {}
+@eventos = []
+@campanhas = []
+~mount GET /api/stats/overview => @overview
+~mount GET /api/stats/eventos => @eventos
+~mount GET /api/campanhas => @campanhas
+~interval 30000 GET /api/stats/overview => @overview
+~interval 60000 GET /api/stats/eventos => @eventos
+nav{AnalyticsAI>/campanhas:Campanhas>/usuarios:Usuários>/logout:Sair}
+stats{@overview.eventos:Eventos|@overview.usuarios:Usuários|@overview.receita:Receita total|@overview.conversoes:Conversões} animate:fade-up
+sect{Eventos recentes} variant:accent
+table @eventos { Tipo:tipo | Página:pagina | Referrer:referrer | Valor:valor | empty: Nenhum evento registrado. }
+sect{Campanhas ativas}
+table @campanhas { Campanha:nome | Fonte:fonte | Orçamento:orcamento | Ativo:ativo | delete DELETE /api/campanhas/{id} | empty: Nenhuma campanha. }
+form POST /api/campanhas => @campanhas.push($result) { Nome:text | Fonte:select:google,meta,email,organic | Orçamento:text:0.00 } variant:inline
+foot{AnalyticsAI Dashboard}

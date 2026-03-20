@@ -1,0 +1,166 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: aiplang test suite
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/aiplang-pkg/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/aiplang-pkg
+        run: npm ci
+
+      - name: Syntax check
+        working-directory: packages/aiplang-pkg
+        run: |
+          node --check bin/aiplang.js
+          node --check server/server.js
+          node --check runtime/aiplang-hydrate.js
+          node --check runtime/aiplang-runtime.js
+
+      - name: CLI version check
+        working-directory: packages/aiplang-pkg
+        run: node bin/aiplang.js --version
+
+      - name: Build all templates
+        working-directory: packages/aiplang-pkg
+        run: |
+          for tpl in ../../templates/*.aip; do
+            echo "Building: $tpl"
+            node bin/aiplang.js build "$tpl" --out "/tmp/$(basename $tpl .aip)" 2>&1
+          done
+
+      - name: Server integration tests
+        working-directory: packages/aiplang-pkg
+        timeout-minutes: 2
+        run: |
+          cat > /tmp/ci-test.aip << 'AIP'
+          ~env JWT_SECRET=ci-test-secret-2025
+          ~db sqlite /tmp/ci-test.db
+          ~auth jwt $JWT_SECRET expire=1h
+
+          model User {
+            id       : uuid : pk auto
+            email    : text : required unique
+            password : text : required hashed
+          }
+
+          model Item {
+            id     : uuid : pk auto
+            titulo : text : required
+            ~belongs User
+          }
+
+          api POST /api/auth/register {
+            ~validate email required email | password min=8
+            ~unique User email $body.email | 409
+            ~hash password
+            insert User($body)
+            return jwt($inserted) 201
+          }
+
+          api POST /api/auth/login {
+            $user = User.findBy(email=$body.email)
+            ~check password $body.password $user.password | 401
+            return jwt($user) 200
+          }
+
+          api GET /api/me { ~guard auth
+            return $auth.user }
+
+          api GET /api/items { ~guard auth
+            return Item.all(order=created_at desc) }
+
+          api POST /api/items { ~guard auth
+            ~validate titulo required
+            insert Item($body)
+            return $inserted 201 }
+
+          api GET /api/stats { return User.count() }
+
+          %home dark /
+          nav{CI Test}
+          hero{Test}
+          foot{OK}
+          AIP
+
+          node -e "
+          const http = require('http');
+          const { spawn } = require('child_process');
+          const fs = require('fs');
+
+          try { fs.unlinkSync('/tmp/ci-test.db') } catch {}
+
+          const srv = spawn(process.execPath, [
+            'server/server.js', '/tmp/ci-test.aip', '9999'
+          ], { stdio: 'pipe', env: { ...process.env, JWT_SECRET: 'ci-test-secret-2025' }});
+
+          let out = '';
+          srv.stdout.on('data', d => out += d);
+
+          const results = [];
+          function check(name, ok) {
+            results.push([name, ok]);
+            console.log((ok ? '✓' : '✗') + ' ' + name);
+            if (!ok) process.exitCode = 1;
+          }
+
+          async function r(m, p, body, token) {
+            return new Promise(resolve => {
+              const d = body ? JSON.stringify(body) : null;
+              const h = {'Content-Type':'application/json'};
+              if (token) h['Authorization'] = 'Bearer ' + token;
+              if (d) h['Content-Length'] = Buffer.byteLength(d);
+              const req = http.request({hostname:'localhost',port:9999,path:p,method:m,headers:h}, res => {
+                let b=''; res.on('data',c=>b+=c); res.on('end',()=>{ try{resolve([res.statusCode,JSON.parse(b)])}catch{resolve([res.statusCode,b])} });
+              });
+              req.on('error', () => resolve([0,{}]));
+              if (d) req.write(d); req.end();
+            });
+          }
+
+          setTimeout(async () => {
+            const [s1,d1] = await r('POST','/api/auth/register',{email:'ci@t.com',password:'senha1234'});
+            check('register 201', s1===201);
+            const tok = d1.token || '';
+
+            const [s2] = await r('POST','/api/auth/login',{email:'ci@t.com',password:'senha1234'});
+            check('login 200', s2===200);
+
+            const [s3] = await r('GET','/api/me');
+            check('no token → 401', s3===401);
+
+            const [s4,d4] = await r('GET','/api/me',null,tok);
+            check('/me with token → 200', s4===200 && d4.email==='ci@t.com');
+
+            const [s5,d5] = await r('POST','/api/items',{titulo:'Test item'},tok);
+            check('create item → 201', s5===201 && !!d5.id);
+
+            const [s6,d6] = await r('GET','/api/items',null,tok);
+            check('list items → 200', s6===200 && d6.length>=1);
+
+            const [s7,d7] = await r('GET','/health');
+            check('health → 200', s7===200);
+
+            const passed = results.filter(([,ok])=>ok).length;
+            console.log('\n' + passed + '/' + results.length + ' tests passed');
+            srv.kill();
+            process.exit(passed < results.length ? 1 : 0);
+          }, 3000);
+          "

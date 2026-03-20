@@ -1,0 +1,114 @@
+# Todo app com autenticação — aiplang template
+# Use: npx aiplang start todo.aip
+# Demonstra: CRUD completo, enum status, filtro por usuário, cache
+
+~env JWT_SECRET required
+~db sqlite ./todo.db
+~auth jwt $JWT_SECRET expire=7d
+~use rate-limit max=100 window=60s
+
+model User {
+  id       : uuid : pk auto
+  nome     : text : required
+  email    : text : required unique
+  password : text : required hashed
+}
+
+model Todo {
+  id         : uuid : pk auto
+  titulo     : text : required
+  descricao  : text
+  status     : enum : pendente,em_andamento,concluido : default=pendente
+  prioridade : enum : baixa,media,alta : default=media
+  ~belongs User
+  ~soft-delete
+}
+
+# ── Auth ─────────────────────────────────────────────────────────
+
+api POST /api/auth/registro {
+  ~validate nome required | email required email | password min=8
+  ~unique User email $body.email | 409
+  ~hash password
+  insert User($body)
+  return jwt($inserted) 201
+}
+
+api POST /api/auth/login {
+  $user = User.findBy(email=$body.email)
+  ~check password $body.password $user.password | 401
+  return jwt($user) 200
+}
+
+api GET /api/me { ~guard auth
+  return $auth.user }
+
+# ── Todos ────────────────────────────────────────────────────────
+
+api GET /api/todos {
+  ~guard auth
+  return Todo.all(order=created_at desc)
+}
+
+api POST /api/todos {
+  ~guard auth
+  ~validate titulo required
+  insert Todo($body)
+  return $inserted 201
+}
+
+api PUT /api/todos/:id {
+  ~guard auth
+  update Todo($id, $body)
+  return $updated
+}
+
+api DELETE /api/todos/:id {
+  ~guard auth
+  delete Todo($id)
+}
+
+api GET /api/stats {
+  ~guard auth
+  return {
+    total: Todo.count(),
+    pendente: Todo.count(),
+    concluido: Todo.count()
+  }
+}
+
+# ── Páginas ──────────────────────────────────────────────────────
+
+%login dark /
+~theme accent=#8b5cf6 radius=1rem font=Inter
+nav{TodoAI>/registro:Criar conta}
+hero{Organize sua vida|Simples, rápido, eficiente.>/registro:Começar grátis} animate:blur-in
+row3{check>Fácil>Adicione tarefas em segundos.|bell>Prioridades>Classifique por urgência.|chart>Progresso>Acompanhe sua evolução.}
+form POST /api/auth/login => redirect /app { Email:email | Senha:password }
+foot{© 2025 TodoAI}
+
+---
+
+%registro dark /registro
+~theme accent=#8b5cf6 radius=1rem font=Inter
+nav{TodoAI>/login:Entrar}
+hero{Criar conta|Grátis para sempre.}
+form POST /api/auth/registro => redirect /app { Nome:text | Email:email | Senha:password }
+foot{© 2025}
+
+---
+
+%app dark /app
+~theme accent=#8b5cf6 radius=1rem font=Inter
+@todos = []
+@stats = {}
+~mount GET /api/todos => @todos
+~mount GET /api/stats => @stats
+~interval 15000 GET /api/todos => @todos
+nav{TodoAI>/logout:Sair}
+stats{@stats.total:Total|@stats.pendente:Pendentes|@stats.concluido:Concluídos}
+sect{Minhas tarefas}
+table @todos { Título:titulo | Prioridade:prioridade | Status:status | edit PUT /api/todos/{id} | delete DELETE /api/todos/{id} | empty: Nenhuma tarefa. Adicione uma abaixo! }
+sect{Nova tarefa}
+form POST /api/todos => @todos.push($result) { Título:text:O que precisa ser feito? | Prioridade:select:baixa,media,alta | Descrição:textarea:Detalhes opcionais }
+foot{TodoAI}
