@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.2'
+const VERSION     = '2.11.3'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -37,6 +37,7 @@ if (!cmd||cmd==='--help'||cmd==='-h') {
     npx aiplang serve [dir]                  dev server + hot reload
     npx aiplang build [dir/file]             compile → static HTML
     npx aiplang validate <app.aip>           validate syntax with AI-friendly errors
+    npx aiplang types   <app.aip>            generate TypeScript types (.d.ts)
     npx aiplang context [app.aip]            dump minimal AI context (<500 tokens)
     npx aiplang new <page>                   new page template
     npx aiplang --version
@@ -451,6 +452,242 @@ const _KNOWN_TYPES = new Set([
   'bigint','smallint','tinyint','currency','money','price'
 ])
 
+
+
+function _parseForTypes(src) {
+  const app = { models:[], apis:[], auth:null }
+  const _ta = {
+    integer:'int',boolean:'bool',double:'float',number:'float',string:'text',
+    varchar:'text',datetime:'timestamp',email:'email',url:'url',uri:'url',
+    phone:'phone',currency:'float',money:'float',price:'float',
+    json:'json',jsonb:'json',bigint:'int',smallint:'int',tinyint:'int'
+  }
+  const norm = t => _ta[(t||'').toLowerCase()] || t || 'text'
+
+  function parseField(line) {
+    const p = line.split(/\s*:\s*/)
+    const f = { name:(p[0]||'').trim(), type:norm(p[1]), modifiers:[], enumVals:[], constraints:{}, default:null }
+    if (f.type === 'enum') {
+      const ev = p.slice(2).find(x => x && !x.startsWith('default=') && !['required','unique','hashed','pk','auto','index'].includes(x.trim()))
+      if (ev) f.enumVals = ev.includes('|') ? ev.split('|').map(v=>v.trim()) : ev.split(',').map(v=>v.trim())
+    }
+    for (let j=2; j<p.length; j++) {
+      const x = (p[j]||'').trim()
+      if (!x) continue
+      if (x.startsWith('default='))     f.default = x.slice(8)
+      else if (x.startsWith('min='))    f.constraints.min = Number(x.slice(4))
+      else if (x.startsWith('max='))    f.constraints.max = Number(x.slice(4))
+      else if (x.startsWith('minLen=')) f.constraints.minLen = Number(x.slice(7))
+      else if (x.startsWith('maxLen=')) f.constraints.maxLen = Number(x.slice(7))
+      else if (x.startsWith('enum:'))   f.enumVals = x.slice(5).includes('|') ? x.slice(5).split('|').map(v=>v.trim()) : x.slice(5).split(',').map(v=>v.trim())
+      else if (x && !x.includes('='))   f.modifiers.push(x)
+    }
+    return f
+  }
+
+  // Juntar todas as linhas e tokenizar por estado
+  const lines = src.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+  let inModel=false, inAPI=false, curModel=null, depth=0
+
+  for (let i=0; i<lines.length; i++) {
+    const line = lines[i]
+
+    // Auth
+    if (line.startsWith('~auth ')) { app.auth = { type: line.includes('jwt') ? 'jwt' : 'basic' }; continue }
+
+    // Model
+    if (line.startsWith('model ') || (line.startsWith('model') && line.includes('{'))) {
+      if (inModel && curModel) app.models.push(curModel)
+      curModel = { name: line.replace(/^model\s+/, '').replace(/\s*\{.*$/, '').trim(), fields:[] }
+      inModel=true; inAPI=false; depth=0
+      if (line.includes('{')) depth++
+      continue
+    }
+
+    // API
+    if (line.startsWith('api ')) {
+      if (inModel && curModel) { app.models.push(curModel); curModel=null; inModel=false }
+      const m = line.match(/^api\s+(\w+)\s+(\S+)/)
+      if (m) {
+        const guards = []
+        // Procura guard tanto na linha atual quanto nas próximas linhas do bloco
+        const blockLines = []
+        let j=i; let bd=0
+        while(j<lines.length) {
+          const bl = lines[j]
+          for(const ch of bl) { if(ch==='{') bd++; else if(ch==='}') bd-- }
+          blockLines.push(bl)
+          if(bd===0 && j>i) break
+          j++
+        }
+        const blockStr = blockLines.join(' ')
+        if (blockStr.includes('~guard auth'))  guards.push('auth')
+        if (blockStr.includes('~guard admin')) guards.push('admin')
+        if (blockStr.includes('=> auth'))      guards.push('auth')
+        if (blockStr.includes('=> admin'))     guards.push('admin')
+        app.apis.push({ method:m[1].toUpperCase(), path:m[2], guards })
+      }
+      inAPI=true; inModel=false
+      // Contar profundidade das chaves para saber quando o bloco fecha
+      depth=0
+      for(const ch of line) { if(ch==='{') depth++; else if(ch==='}') depth-- }
+      if(depth<=0) { inAPI=false; depth=0 }
+      continue
+    }
+
+    // Dentro de api block: rastrear chaves
+    if (inAPI) {
+      for(const ch of line) { if(ch==='{') depth++; else if(ch==='}') depth-- }
+      if(depth<=0) { inAPI=false; depth=0 }
+      continue
+    }
+
+    // Fechar model
+    if (line === '}' && inModel) {
+      if (curModel) { app.models.push(curModel); curModel=null }
+      inModel=false; continue
+    }
+
+    // Campos do model
+    if (inModel && curModel && line && line !== '{' && !line.startsWith('~') && line.includes(':')) {
+      const f = parseField(line)
+      if (f.name) curModel.fields.push(f)
+    }
+  }
+  if (inModel && curModel) app.models.push(curModel)
+  return app
+}
+
+// ── TypeScript type generator ────────────────────────────────────
+// Maps aiplang types to TypeScript equivalents
+const _AIP_TO_TS = {
+  text:'string', string:'string', email:'string', url:'string',
+  phone:'string', slug:'string', color:'string', file:'string', image:'string',
+  int:'number', integer:'number', float:'number', double:'number',
+  number:'number', currency:'number', money:'number', price:'number',
+  bool:'boolean', boolean:'boolean',
+  uuid:'string', date:'string', timestamp:'string', datetime:'string',
+  json:'Record<string,unknown>', jsonb:'Record<string,unknown>',
+}
+
+function generateTypes(app, srcFile) {
+  const lines = [
+    '// ─────────────────────────────────────────────────────────────',
+    `// aiplang generated types — ${srcFile || 'app.aip'}`,
+    `// Generated: ${new Date().toISOString()}`,
+    '// DO NOT EDIT — regenerate with: npx aiplang types <app.aip>',
+    '// ─────────────────────────────────────────────────────────────',
+    '',
+  ]
+
+  // Model interfaces
+  for (const model of (app.models || [])) {
+    const name = model.name
+    lines.push(`// Model: ${name}`)
+
+    // Enum types first
+    for (const f of (model.fields || [])) {
+      if (f.type === 'enum' && f.enumVals && f.enumVals.length) {
+        lines.push(`export type ${name}${_cap(f.name)} = ${f.enumVals.map(v => `'${v}'`).join(' | ')}`)
+      }
+    }
+
+    // Main interface
+    lines.push(`export interface ${name} {`)
+    for (const f of (model.fields || [])) {
+      const req   = f.modifiers && f.modifiers.includes('required')
+      const pk    = f.modifiers && f.modifiers.includes('pk')
+      const auto  = f.modifiers && f.modifiers.includes('auto')
+      const opt   = !req || pk || auto
+      let tsType
+      if (f.type === 'enum' && f.enumVals && f.enumVals.length) {
+        tsType = `${name}${_cap(f.name)}`
+      } else {
+        tsType = _AIP_TO_TS[f.type] || 'string'
+      }
+      // Constraint comments
+      const constraints = []
+      if (f.constraints) {
+        if (f.constraints.min != null)    constraints.push(`min:${f.constraints.min}`)
+        if (f.constraints.max != null)    constraints.push(`max:${f.constraints.max}`)
+        if (f.constraints.minLen != null) constraints.push(`minLen:${f.constraints.minLen}`)
+        if (f.constraints.maxLen != null) constraints.push(`maxLen:${f.constraints.maxLen}`)
+        if (f.constraints.format)         constraints.push(`format:${f.constraints.format}`)
+      }
+      const comment = constraints.length ? `  // ${constraints.join(', ')}` : ''
+      const mods = []
+      if (f.modifiers) {
+        if (f.modifiers.includes('unique')) mods.push('@unique')
+        if (f.modifiers.includes('hashed')) mods.push('@hashed')
+        if (pk)   mods.push('@pk')
+        if (auto) mods.push('@auto')
+      }
+      const modStr = mods.length ? ` /** ${mods.join(' ')} */` : ''
+      lines.push(`  ${f.name}${opt ? '?' : ''}: ${tsType}${modStr}${comment}`)
+    }
+    lines.push(`}`)
+    lines.push(``)
+
+    // Input type (for POST/PUT — excludes pk/auto, optional for patches)
+    const inputFields = (model.fields || []).filter(f =>
+      !(f.modifiers && f.modifiers.includes('pk')) &&
+      !(f.modifiers && f.modifiers.includes('auto')) &&
+      f.name !== 'created_at' && f.name !== 'updated_at'
+    )
+    if (inputFields.length) {
+      lines.push(`export interface ${name}Input {`)
+      for (const f of inputFields) {
+        const req = f.modifiers && f.modifiers.includes('required')
+        let tsType
+        if (f.type === 'enum' && f.enumVals && f.enumVals.length) {
+          tsType = `${name}${_cap(f.name)}`
+        } else {
+          tsType = _AIP_TO_TS[f.type] || 'string'
+        }
+        lines.push(`  ${f.name}${req ? '' : '?'}: ${tsType}`)
+      }
+      lines.push(`}`)
+      lines.push(``)
+    }
+  }
+
+  // API route types
+  if ((app.apis || []).length) {
+    lines.push(`// ── API Route types ──────────────────────────────────────────`)
+    lines.push(``)
+    lines.push(`export interface AiplangRoutes {`)
+    for (const api of (app.apis || [])) {
+      const method = api.method.toUpperCase()
+      const path   = api.path.replace(/\//g, '_').replace(/[^a-zA-Z0-9_]/g,'').replace(/^_/,'')
+      const guards = (api.guards || []).join(', ')
+      const guardComment = guards ? ` /** guards: ${guards} */` : ''
+      lines.push(`  '${method} ${api.path}': {${guardComment}}`)
+    }
+    lines.push(`}`)
+    lines.push(``)
+  }
+
+  // Convenience type for auth user
+  const hasAuth = app.auth && app.auth.type
+  if (hasAuth) {
+    const userModel = (app.models || []).find(m => m.name === 'User' || m.name === 'user')
+    if (userModel) {
+      lines.push(`// ── Auth types ───────────────────────────────────────────────`)
+      lines.push(`export type AuthUser = Pick<User, 'id' | 'email'${(userModel.fields||[]).some(f=>f.name==='role')?" | 'role'":''}> & { type: 'access' | 'refresh', iat: number, exp: number }`)
+      lines.push(`declare global { namespace Express { interface Request { user?: AuthUser } } }`)
+      lines.push(``)
+    }
+  }
+
+  lines.push(`// ── aiplang version ──────────────────────────────────────────`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.3'`)
+  lines.push(``)
+  return lines.join('\n')
+}
+
+function _cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s }
+
+
 function validateAipSrc(source) {
   const errors = []
   const lines = source.split('\n')
@@ -488,6 +725,34 @@ function validateAipSrc(source) {
     }
   }
   return errors
+}
+
+if (cmd==='types'||cmd==='type'||cmd==='dts') {
+  const file = args[0]
+  if (!file) { console.error('\n  Usage: aiplang types <app.aip> [--out types.d.ts]\n'); process.exit(1) }
+  if (!require('fs').existsSync(file)) { console.error(`\n  ✗  Arquivo não encontrado: ${file}\n`); process.exit(1) }
+  const src = require('fs').readFileSync(file,'utf8')
+  const errs = validateAipSrc(src)
+  if (errs.some(e => e.severity === 'error')) {
+    console.error('\n  ✗  Corrija os erros antes de gerar tipos:\n')
+    errs.filter(e=>e.severity==='error').forEach(e=>console.error(`  Line ${e.line}: ${e.message}`))
+    process.exit(1)
+  }
+  const serverPath = require('path').join(__dirname,'../server/server.js')
+  // Parse models and routes from .aip source for type generation
+  // Lightweight inline parser — no DB, no server init required
+  const app = _parseForTypes(src)
+  const _outIdx = args.indexOf('--out')
+  const outFile = (_outIdx >= 0 && args[_outIdx+1]) ? args[_outIdx+1] : file.replace(/\.aip$/,'') + '.d.ts'
+  const dts = generateTypes(app, require('path').basename(file))
+  require('fs').writeFileSync(outFile, dts)
+  console.log(`\n  ✅  Tipos gerados: ${outFile}`)
+  console.log(`  ${(app.models||[]).length} models · ${(app.apis||[]).length} routes\n`)
+  // Also show preview
+  const preview = dts.split('\n').slice(0,30).join('\n')
+  console.log(preview)
+  if (dts.split('\n').length > 30) console.log('  ...')
+  process.exit(0)
 }
 
 if (cmd==='validate'||cmd==='check'||cmd==='lint') {
