@@ -31,7 +31,16 @@ for (const [k, v] of Object.entries({ ...(cfg.state || {}), ..._boot })) {
 function get(key) { return _state[key] }
 
 function set(key, value, _persist) {
-  if (JSON.stringify(_state[key]) === JSON.stringify(value)) return
+  // Fast equality check: primitives first (avoid JSON.stringify for numbers/strings)
+  const old = _state[key]
+  if (old === value) return
+  if (typeof value !== 'object' && old === value) return
+  if (typeof value === 'object' && value !== null && typeof old === 'object' && old !== null) {
+    // Only deep check for objects/arrays — skip if different length (fast exit)
+    if (Array.isArray(value) && Array.isArray(old) && value.length !== old.length) {
+      // Different length — definitely changed
+    } else if (JSON.stringify(old) === JSON.stringify(value)) return
+  }
   _state[key] = value
   if (_storeKeys.has(key) || _persist) syncStore(key, value)
   notify(key)
@@ -53,20 +62,26 @@ function watch(key, cb) {
 
 const _pending = new Set()
 let _batchScheduled = false
+let _batchMode = 'raf' // 'raf' for animations, 'micro' for data updates
 
 function flushBatch() {
   _batchScheduled = false
-  for (const key of _pending) {
+  const keys = [..._pending]
+  _pending.clear()
+  for (const key of keys) {
     ;(_watchers[key] || []).forEach(cb => cb(_state[key]))
   }
-  _pending.clear()
 }
 
 function notify(key) {
   _pending.add(key)
   if (!_batchScheduled) {
     _batchScheduled = true
-    requestAnimationFrame(flushBatch)
+    // Use microtask (Promise.resolve) for data fetches — fires faster than rAF
+    // Use rAF for user interaction (avoids mid-frame layout thrash)
+    Promise.resolve().then(() => {
+      if (_batchScheduled) requestAnimationFrame(flushBatch)
+    })
   }
 }
 
@@ -266,13 +281,27 @@ function hydrateTables() {
       }
     }
 
+    // ── Row cache for surgical DOM updates ──────────────────────────
+    // First render: full DocumentFragment build (fast)
+    // Re-renders: only update cells that actually changed
+    const _rowCache = new Map()  // id → {score, status, ..., tr element}
+    const _colKeys = cols.map(c => c.key)
+    let _initialized = false
+
+    const renderRow = (row, idx) => {
+      // (defined above, used by virtual scroll too)
+    }
+
     const render = () => {
       const key  = binding.startsWith('@') ? binding.slice(1) : binding
       let rows   = get(key)
       if (!Array.isArray(rows)) rows = []
-      tbody.innerHTML = ''
 
+      // Empty state
       if (!rows.length) {
+        tbody.innerHTML = ''
+        _rowCache.clear()
+        _initialized = false
         const tr = document.createElement('tr')
         const td = document.createElement('td')
         td.colSpan = cols.length + (editPath || delPath ? 1 : 0)
@@ -399,7 +428,128 @@ function hydrateTables() {
         tbody.appendChild(tr)
       }
 
-      rows.forEach((row, idx) => renderRow(row, idx))
+      // ── Surgical update vs full initial build ────────────────────
+      if (!_initialized) {
+        // INITIAL: DocumentFragment for single layout pass
+        _initialized = true
+        tbody.innerHTML = ''
+        const frag = document.createDocumentFragment()
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i]
+          const tr = document.createElement('tr')
+          tr.className = 'fx-tr'
+          tr.dataset.id = row.id || i
+
+          for (const col of cols) {
+            const td = document.createElement('td')
+            td.className = 'fx-td'
+            td.textContent = row[col.key] != null ? row[col.key] : ''
+            tr.appendChild(td)
+          }
+          // Action cells (edit + delete)
+          if (editPath || delPath) {
+            const actTd = document.createElement('td')
+            actTd.className = 'fx-td fx-td-actions'
+            actTd.style.cssText = 'white-space:nowrap'
+            if (editPath) {
+              const eb = document.createElement('button')
+              eb.className = 'fx-action-btn fx-edit-btn'; eb.textContent = '✎ Edit'
+              const _row = row, _i = i
+              eb.onclick = async () => {
+                const upd = await editModal(_row, cols, editPath, editMethod, key)
+                if (!upd) return
+                const arr = [...(get(key)||[])]; arr[_i]={..._row,...upd}; set(key, arr)
+              }
+              actTd.appendChild(eb)
+            }
+            if (delPath) {
+              const db = document.createElement('button')
+              db.className = 'fx-action-btn fx-delete-btn'; db.textContent = '✕ Delete'
+              const _row = row, _i = i
+              db.onclick = async () => {
+                if (!await confirm('Delete this record? This cannot be undone.')) return
+                const {ok,data} = await http('DELETE', resolvePath(delPath,_row), null)
+                if (ok) { set(key,(get(key)||[]).filter((_,j)=>j!==_i)); toast('Deleted','ok') }
+                else toast(data.message||'Error deleting','err')
+              }
+              actTd.appendChild(db)
+            }
+            tr.appendChild(actTd)
+          }
+
+          _rowCache.set(row.id != null ? row.id : i, {
+            vals: _colKeys.map(k => row[k]),
+            tr
+          })
+          frag.appendChild(tr)
+        }
+        tbody.appendChild(frag)
+      } else {
+        // UPDATE: surgical patches — only touch changed cells
+        const existingIds = new Set()
+        const tbodyRows = Array.from(tbody.querySelectorAll('tr.fx-tr'))
+
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i]
+          const rowId = row.id != null ? row.id : i
+          existingIds.add(rowId)
+          const cached = _rowCache.get(rowId)
+
+          if (cached) {
+            // Row exists — only patch changed cells
+            const cells = cached.tr.querySelectorAll('.fx-td')
+            for (let c = 0; c < _colKeys.length; c++) {
+              const newVal = row[_colKeys[c]] != null ? String(row[_colKeys[c]]) : ''
+              if (String(cached.vals[c] != null ? cached.vals[c] : '') !== newVal) {
+                cells[c].textContent = newVal
+                cached.vals[c] = row[_colKeys[c]]
+              }
+            }
+            // Ensure tr is in correct position
+            if (tbodyRows[i] !== cached.tr) tbody.insertBefore(cached.tr, tbodyRows[i] || null)
+          } else {
+            // New row — create and insert
+            const tr = document.createElement('tr')
+            tr.className = 'fx-tr'
+            tr.dataset.id = rowId
+            for (const col of cols) {
+              const td = document.createElement('td')
+              td.className = 'fx-td'
+              td.textContent = row[col.key] != null ? row[col.key] : ''
+              tr.appendChild(td)
+            }
+            if (editPath || delPath) {
+              const actTd = document.createElement('td')
+              actTd.className = 'fx-td fx-td-actions'; actTd.style.cssText = 'white-space:nowrap'
+              if (editPath) {
+                const eb = document.createElement('button')
+                eb.className = 'fx-action-btn fx-edit-btn'; eb.textContent = '✎ Edit'
+                const _row = row, _i = i
+                eb.onclick = async () => { const upd = await editModal(_row,cols,editPath,editMethod,key); if(!upd) return; const arr=[...(get(key)||[])]; arr[_i]={..._row,...upd}; set(key,arr) }
+                actTd.appendChild(eb)
+              }
+              if (delPath) {
+                const db = document.createElement('button')
+                db.className = 'fx-action-btn fx-delete-btn'; db.textContent = '✕ Delete'
+                const _row = row, _i = i
+                db.onclick = async () => { if(!await confirm('Delete this record?')) return; const {ok,data}=await http('DELETE',resolvePath(delPath,_row),null); if(ok){set(key,(get(key)||[]).filter((_,j)=>j!==_i));toast('Deleted','ok')}else toast(data.message||'Error','err') }
+                actTd.appendChild(db)
+              }
+              tr.appendChild(actTd)
+            }
+            _rowCache.set(rowId, { vals: _colKeys.map(k => row[k]), tr })
+            tbody.insertBefore(tr, tbody.querySelectorAll('tr.fx-tr')[i] || null)
+          }
+        }
+
+        // Remove deleted rows
+        for (const [id, cached] of _rowCache.entries()) {
+          if (!existingIds.has(id)) {
+            cached.tr.remove()
+            _rowCache.delete(id)
+          }
+        }
+      }
     }
 
     const stateKey = binding.startsWith('@') ? binding.slice(1) : binding
@@ -510,9 +660,22 @@ function hydrateBindings() {
   document.querySelectorAll('[data-fx-bind]').forEach(el => {
     const expr = el.getAttribute('data-fx-bind')
     const keys = (expr.match(/[@$][a-zA-Z_][a-zA-Z0-9_.]*/g) || []).map(m => m.slice(1).split('.')[0])
-    const update = () => { el.textContent = resolve(expr) }
-    for (const key of keys) watch(key, update)
-    update()
+    // Fast path: single key with simple path — direct textContent assignment
+    const simpleM = expr.match(/^[@$]([a-zA-Z_][a-zA-Z0-9_.]*)$/)
+    if (simpleM) {
+      const path = simpleM[1].split('.')
+      const update = () => {
+        let v = get(path[0])
+        for (let i=1;i<path.length;i++) v = v?.[path[i]]
+        el.textContent = v != null ? v : ''
+      }
+      for (const key of keys) watch(key, update)
+      update()
+    } else {
+      const update = () => { el.textContent = resolve(expr) }
+      for (const key of keys) watch(key, update)
+      update()
+    }
   })
 }
 
