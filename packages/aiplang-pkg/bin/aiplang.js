@@ -5,7 +5,7 @@ const fs   = require('fs')
 const path = require('path')
 const http = require('http')
 
-const VERSION     = '2.11.6'
+const VERSION     = '2.11.7'
 const RUNTIME_DIR = path.join(__dirname, '..', 'runtime')
 const cmd         = process.argv[2]
 const args        = process.argv.slice(3)
@@ -686,7 +686,7 @@ function generateTypes(app, srcFile) {
   }
 
   lines.push(`// ── aiplang version ──────────────────────────────────────────`)
-  lines.push(`export const AIPLANG_VERSION     = '2.11.6'`)
+  lines.push(`export const AIPLANG_VERSION     = '2.11.7'`)
   lines.push(``)
   return lines.join('\n')
 }
@@ -1044,6 +1044,11 @@ function parseBlock(line) {
   if(line.startsWith('benchmark{')) { const m=line.match(/^benchmark\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);const am=line.match(/animate:(\S+)/);return{kind:'benchmark',items:m[1].split('|').map(it=>{const p=it.trim().split(':');return{num:p[0]?.trim(),label:p[1]?.trim(),vs:p[2]?.trim(),pct:parseInt(p[3])||0}}),variant:vm?.[1],animate:am?.[1]}} }
   if(line.startsWith('install{'))   { const m=line.match(/^install\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'install',cmds:m[1].split('|').map(c=>c.trim()).filter(Boolean),variant:vm?.[1]}} }
   if(line.startsWith('feature{'))   { const b=parseBlock(line.replace(/^feature/,'row3'));if(b){b.variant='feature'};return b }
+  if(line.startsWith('marquee{'))   { const m=line.match(/^marquee\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'marquee',items:m[1].split('|').map(s=>s.trim()).filter(Boolean),variant:vm?.[1]}} }
+  if(line.startsWith('cta{'))        { const m=line.match(/^cta\{([^}]*)\}/);if(m){const pts=m[1].split('|');let t='',s='',links=[];pts.forEach(p=>{const lm=p.match(/^([^>]+)>([^>]+)$/);if(lm)links.push({label:lm[1].trim(),path:lm[2].trim()});else if(!t)t=p.trim();else s=p.trim()});const vm=line.match(/variant:(\S+)/);return{kind:'cta',title:t,sub:s,links,variant:vm?.[1]}} }
+  if(line.startsWith('steps{'))      { const m=line.match(/^steps\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'steps',items:m[1].split('|').map(it=>{const p=it.trim().split('>');return{num:p[0]?.trim(),title:p[1]?.trim(),desc:p[2]?.trim()}}),variant:vm?.[1]}} }
+  if(line.startsWith('compare{'))    { const m=line.match(/^compare\{([^}]*)\}/);if(m){const vm=line.match(/variant:(\S+)/);return{kind:'compare',rows:m[1].split('|').map(r=>r.trim().split(':').map(c=>c.trim())),variant:vm?.[1]}} }
+  if(line.startsWith('video{'))      { const m=line.match(/^video\{([^}]*)\}/);if(m){const pts=m[1].split('|');return{kind:'video',url:pts[0]?.trim(),poster:pts[1]?.trim()}} }
   if(line.startsWith('faq{')) {
     const body=line.slice(4,line.lastIndexOf('}')).trim()
     const items=body.split('|').map(i=>{const idx=i.indexOf('>');return{q:i.slice(0,idx).trim(),a:i.slice(idx+1).trim()}}).filter(i=>i.q&&i.a)
@@ -1277,6 +1282,11 @@ function renderBlock(b, page) {
     case 'install':     return rInstall(b)
     case 'feature':     return rRow(b)
     case 'testimonial': return rTestimonial(b)
+    case 'marquee':     return rMarquee(b)
+    case 'cta':         return rCta(b)
+    case 'steps':       return rSteps(b)
+    case 'compare':     return rCompare(b)
+    case 'video':       return rVideo(b)
     case 'gallery':     return rGallery(b)
     case 'raw':         return (b.html||'')+'\n'
     case 'html':        return `<div class="fx-html">${b.content||''}</div>\n`
@@ -1400,10 +1410,17 @@ function parseFeature(line) {
 
 function rHero(b) {
   let h1='',sub='',img='',ctas=''
+  let heroBadge = ''
   for(const item of (b.items||[])) for(const f of item){
+    if(f.text?.startsWith('badge:')) { heroBadge=`<div class="fx-hero-badge"><span class="fx-hero-badge-dot"></span>${esc(f.text.slice(6).trim())}</div>`; continue }
     if(f.isImg) img=`<img src="${esc(f.src)}" class="fx-hero-img" alt="hero" loading="eager">`
     else if(f.isLink) ctas+=`<a href="${esc(f.path)}" class="fx-cta">${esc(f.label)}</a>`
-    else if(!h1) h1=`<h1 class="fx-title">${esc(f.text)}</h1>`
+    else if(!h1) {
+      // *texto* entre asteriscos = gradient text
+      const gt = f.text.match(/^\*(.*?)\*$/)
+      if(gt) h1=`<h1 class="fx-title"><span class="fx-gradient-text">${esc(gt[1])}</span></h1>`
+      else h1=`<h1 class="fx-title">${esc(f.text)}</h1>`
+    }
     else sub+=`<p class="fx-sub">${esc(f.text)}</p>`
   }
   const v = b.variant || (img ? 'split' : 'centered')
@@ -1413,6 +1430,7 @@ function rHero(b) {
     return `<section class="fx-hero fx-hero-landing"${bgStyle}><div class="fx-hero-inner">${h1}${sub}${ctas}</div></section>
 `
   }
+  if (h1) h1 = heroBadge + h1
   if (v === 'minimal') {
     return `<section class="fx-hero fx-hero-minimal"${bgStyle}><div class="fx-hero-inner">${h1}${sub}${ctas}</div></section>\n`
   }
@@ -1468,7 +1486,7 @@ function rRow(b) {
   }).join('')
   const v=b.variant||''
   const wrapStyle=b.style?` style="${b.style.replace(/,/g,';')}"`:''
-  return `<div class="fx-grid fx-grid-${b.cols||3}${v?' fx-grid-'+v:''}"${wrapStyle}>${cards}</div>\n`
+  return `<div class="fx-grid fx-grid-${b.cols||3}${v?' fx-grid-'+v:''} fx-animate-stagger"${wrapStyle}>${cards}</div>\n`
 }
 
 function rSect(b) {
@@ -1482,7 +1500,7 @@ function rSect(b) {
   const bgStyle=b.bg?` style="background:${b.bg}"`:(b.style?` style="${b.style.replace(/,/g,';')}"`:'' )
   const v = b.variant||''
   const cls = v ? ` fx-sect-${v}` : ''
-  return `<section class="fx-sect${cls}"${bgStyle}>${inner}</section>\n`
+  return `<section class="fx-sect${cls} fx-animate"${bgStyle}>${inner}</section>\n`
 }
 
 
@@ -1525,7 +1543,7 @@ function rBenchmark(b) {
   <div class="fx-bench-bar"><div class="fx-bench-fill" style="width:${isLow?pct+'%':pct+'%'}"></div></div>
 </div>`
   }).join('')
-  return `<div class="fx-benchmark">${cards}</div>\n`
+  return `<div class="fx-benchmark fx-animate-stagger">${cards}</div>\n`
 }
 
 // ── rInstall: multi-step code box com botões ──────────────────────
@@ -1552,8 +1570,12 @@ function rStatsUpgraded(b) {
     const lbl = parts[1]?.trim()
     const vs  = parts[2]?.trim()
     const bind = isDyn(val) ? ` data-fx-bind="${esc(val)}"` : ''
+    // Números → animados com counter
+    const isNum = !isDyn(val) && /^[\d.,]+[KkMmBb%]?$/.test(val?.replace(/ms|KB|GB|px/,''))
+    const numAttr = isNum && !isDyn(val) ? ` data-to="${val.replace(/[^\d.]/g,'')}" data-dec="${val.includes('.')?val.split('.')[1]?.replace(/[^\d]/g,'').length||0:0}"` : ''
+    const countCls = isNum && !isDyn(val) ? ' fx-count' : ''
     return `<div class="fx-stat">
-  <div class="fx-stat-val"${bind}>${esc(val)}</div>
+  <div class="fx-stat-val${countCls}"${bind}${numAttr}>${esc(val)}</div>
   <div class="fx-stat-lbl">${esc(lbl||'')}</div>
   ${vs ? `<div class="fx-stat-vs">${esc(vs)}</div>` : ''}
 </div>`
@@ -1561,6 +1583,88 @@ function rStatsUpgraded(b) {
   return `<div class="fx-stats">${cells}</div>\n`
 }
 
+
+
+// ── rMarquee: faixa de logos/texto em loop infinito ───────────────
+function rMarquee(b) {
+  const speed = b.variant === 'fast' ? '15s' : b.variant === 'slow' ? '40s' : '25s'
+  const items = (b.items||[]).map(item =>
+    `<span class="fx-marquee-item">${esc(item)}</span><span class="fx-marquee-sep">·</span>`
+  ).join('')
+  // Duplicar para loop contínuo
+  return `<div class="fx-marquee"><div class="fx-marquee-track" style="animation-duration:${speed}">${items}${items}</div></div>\n`
+}
+
+// ── rCta: seção call-to-action com glow ───────────────────────────
+function rCta(b) {
+  const btns = (b.links||[]).map((l,i) =>
+    `<a href="${esc(l.path)}" class="fx-cta${i===0?'':' fx-cta-outline'}">${esc(l.label)}</a>`
+  ).join('')
+  const v = b.variant || 'default'
+  return `<section class="fx-cta-section fx-cta-${v}">
+  <div class="fx-cta-glow"></div>
+  <div class="fx-cta-inner">
+    ${b.title?`<h2 class="fx-cta-title">${esc(b.title)}</h2>`:''}
+    ${b.sub?`<p class="fx-cta-sub">${esc(b.sub)}</p>`:''}
+    <div class="fx-cta-actions">${btns}</div>
+  </div>
+</section>\n`
+}
+
+// ── rSteps: passos 1-2-3 com linha conectora ──────────────────────
+function rSteps(b) {
+  const items = (b.items||[]).map((step, i) =>
+    `<div class="fx-step">
+  <div class="fx-step-num">${esc(step.num||String(i+1))}</div>
+  <div class="fx-step-body">
+    <div class="fx-step-title">${esc(step.title||'')}</div>
+    <div class="fx-step-desc">${esc(step.desc||'')}</div>
+  </div>
+</div>`
+  ).join('')
+  const v = b.variant === 'vertical' ? ' fx-steps-vertical' : ''
+  return `<div class="fx-steps${v} fx-animate-stagger">${items}</div>\n`
+}
+
+// ── rCompare: tabela X vs Y ───────────────────────────────────────
+function rCompare(b) {
+  const rows = b.rows || []
+  if (!rows.length) return ''
+  // Primeira linha = cabeçalho se tiver textos
+  const header = rows[0]
+  const isHeader = header.length > 1 && !header[0].startsWith('✅') && !header[0].startsWith('❌')
+  const headerHtml = isHeader
+    ? `<div class="fx-compare-header">${header.map((h,i) => `<div class="fx-compare-cell${i===0?' fx-compare-feature':i===1?' fx-compare-col-a':' fx-compare-col-b'}">${esc(h)}</div>`).join('')}</div>`
+    : ''
+  const dataRows = isHeader ? rows.slice(1) : rows
+  const bodyHtml = dataRows.map(row => {
+    const feature = row[0] || ''
+    const a = row[1] || ''
+    const b2 = row[2] || ''
+    const checkA = a === '✅' || a === 'sim' || a === 'yes' ? '✅' : a === '❌' || a === 'nao' || a === 'no' ? '❌' : esc(a)
+    const checkB = b2 === '✅' || b2 === 'sim' || b2 === 'yes' ? '✅' : b2 === '❌' || b2 === 'nao' || b2 === 'no' ? '❌' : esc(b2)
+    return `<div class="fx-compare-row">
+  <div class="fx-compare-cell fx-compare-feature">${esc(feature)}</div>
+  <div class="fx-compare-cell fx-compare-col-a">${checkA}</div>
+  <div class="fx-compare-cell fx-compare-col-b">${checkB}</div>
+</div>`
+  }).join('')
+  return `<div class="fx-compare">${headerHtml}${bodyHtml}</div>\n`
+}
+
+// ── rVideo: embed de vídeo ou youtube ─────────────────────────────
+function rVideo(b) {
+  const url = b.url || ''
+  const poster = b.poster || ''
+  // Detectar YouTube
+  const ytMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)
+  if (ytMatch) {
+    const id = ytMatch[1]
+    return `<div class="fx-video-wrap"><div class="fx-video-yt"><iframe src="https://www.youtube-nocookie.com/embed/${esc(id)}?rel=0" frameborder="0" allowfullscreen loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe></div></div>\n`
+  }
+  // Vídeo HTML5
+  return `<div class="fx-video-wrap"><video class="fx-video" controls${poster?` poster="${esc(poster)}"`:''}  preload="metadata"><source src="${esc(url)}"></video></div>\n`
+}
 
 // ── autoYear: substitui © YYYY por © <span data-fx-year></span> ──
 function autoYear(text) {
@@ -1757,6 +1861,69 @@ function css(theme) {
 .fx-footer-brand{font-size:1rem;font-weight:800;letter-spacing:-.02em}
 .fx-footer-links{display:flex;gap:1.5rem;flex-wrap:wrap}
 .fx-footer-note{font-size:.72rem;opacity:.3;font-family:monospace}
+/* ── marquee ── */
+.fx-marquee{overflow:hidden;padding:1.5rem 0;border-top:1px solid rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.06);-webkit-mask:linear-gradient(90deg,transparent,black 10%,black 90%,transparent);mask:linear-gradient(90deg,transparent,black 10%,black 90%,transparent)}
+.fx-marquee-track{display:flex;width:max-content;animation:fx-marquee 25s linear infinite}
+.fx-marquee:hover .fx-marquee-track{animation-play-state:paused}
+@keyframes fx-marquee{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+.fx-marquee-item{font-size:.9375rem;font-weight:600;opacity:.35;white-space:nowrap;padding:0 1.5rem;transition:opacity .2s}
+.fx-marquee-item:hover{opacity:.7}
+.fx-marquee-sep{opacity:.15;padding:0 .25rem}
+/* ── cta section ── */
+.fx-cta-section{position:relative;padding:6rem 2.5rem;text-align:center;overflow:hidden}
+.fx-cta-glow{position:absolute;width:600px;height:400px;border-radius:50%;background:radial-gradient(ellipse,rgba(var(--accent-rgb,255,87,34),.12),transparent 70%);left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
+.fx-cta-inner{position:relative;z-index:1;max-width:44rem;margin:0 auto;display:flex;flex-direction:column;align-items:center;gap:1.5rem}
+.fx-cta-title{font-size:clamp(2rem,5vw,4rem);font-weight:900;letter-spacing:-.04em;line-height:1.05}
+.fx-cta-sub{font-size:1.0625rem;line-height:1.75;opacity:.65;max-width:36rem}
+.fx-cta-actions{display:flex;gap:.875rem;flex-wrap:wrap;justify-content:center}
+.fx-cta-outline{background:transparent!important;border:1px solid rgba(255,255,255,.2)!important;color:inherit!important}
+.fx-cta-outline:hover{background:rgba(255,255,255,.05)!important}
+/* ── steps ── */
+.fx-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2rem;padding:2rem 2.5rem 4rem;position:relative}
+.fx-steps::before{content:"";position:absolute;top:3.5rem;left:calc(2.5rem + 1.5rem);right:calc(2.5rem + 1.5rem);height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.1),transparent);pointer-events:none}
+.fx-step{display:flex;flex-direction:column;align-items:flex-start;gap:1rem}
+.fx-step-num{width:48px;height:48px;border-radius:50%;background:var(--accent,#ff5722);color:#fff;font-weight:900;font-size:1.125rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;z-index:1}
+.fx-step-title{font-size:1rem;font-weight:700;margin-bottom:.375rem;letter-spacing:-.02em}
+.fx-step-desc{font-size:.875rem;line-height:1.65;opacity:.6}
+.fx-steps-vertical{grid-template-columns:1fr}
+.fx-steps-vertical::before{display:none}
+.fx-steps-vertical .fx-step{flex-direction:row}
+/* ── compare ── */
+.fx-compare{max-width:640px;margin:0 auto 4rem;padding:0 2.5rem}
+.fx-compare-header{display:grid;grid-template-columns:1fr 1fr 1fr;padding:.75rem 1rem;background:rgba(255,255,255,.04);border-radius:.75rem .75rem 0 0;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;opacity:.6}
+.fx-compare-row{display:grid;grid-template-columns:1fr 1fr 1fr;padding:.75rem 1rem;border-bottom:1px solid rgba(255,255,255,.05);transition:background .15s}
+.fx-compare-row:hover{background:rgba(255,255,255,.02)}
+.fx-compare-row:last-child{border-bottom:none;border-radius:0 0 .75rem .75rem}
+.fx-compare-cell{font-size:.875rem}
+.fx-compare-feature{opacity:.7}
+.fx-compare-col-a{text-align:center;color:#4ade80}
+.fx-compare-col-b{text-align:center;opacity:.35}
+/* ── video ── */
+.fx-video-wrap{padding:0 2.5rem 3rem}
+.fx-video-yt{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:1rem;border:1px solid rgba(255,255,255,.06)}
+.fx-video-yt iframe{position:absolute;top:0;left:0;width:100%;height:100%}
+.fx-video{width:100%;border-radius:1rem;border:1px solid rgba(255,255,255,.06)}
+/* ── gradient text ── */
+.fx-gradient-text{background:linear-gradient(135deg,var(--accent,#ff5722),#ff8a50,#ffd4c4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+/* ── scroll animations (IntersectionObserver) ── */
+.fx-animate{opacity:0;transform:translateY(20px);transition:opacity .6s cubic-bezier(.4,0,.2,1),transform .6s cubic-bezier(.4,0,.2,1)}
+.fx-animate.fx-visible{opacity:1;transform:none}
+.fx-animate-delay-1{transition-delay:.1s}
+.fx-animate-delay-2{transition-delay:.2s}
+.fx-animate-delay-3{transition-delay:.3s}
+.fx-animate-stagger>*{opacity:0;transform:translateY(16px);transition:opacity .5s cubic-bezier(.4,0,.2,1),transform .5s cubic-bezier(.4,0,.2,1)}
+.fx-animate-stagger.fx-visible>*:nth-child(1){opacity:1;transform:none;transition-delay:.05s}
+.fx-animate-stagger.fx-visible>*:nth-child(2){opacity:1;transform:none;transition-delay:.15s}
+.fx-animate-stagger.fx-visible>*:nth-child(3){opacity:1;transform:none;transition-delay:.25s}
+.fx-animate-stagger.fx-visible>*:nth-child(4){opacity:1;transform:none;transition-delay:.35s}
+.fx-animate-stagger.fx-visible>*:nth-child(5){opacity:1;transform:none;transition-delay:.45s}
+.fx-animate-stagger.fx-visible>*:nth-child(6){opacity:1;transform:none;transition-delay:.55s}
+/* ── number counter ── */
+.fx-count{display:inline-block}
+/* ── hero badge ── */
+.fx-hero-badge{display:inline-flex;align-items:center;gap:.5rem;font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;padding:.3rem 1rem;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);margin-bottom:1.25rem}
+.fx-hero-badge-dot{width:6px;height:6px;border-radius:50%;background:var(--accent,#ff5722);animation:fx-blink 2s ease infinite}
+@keyframes fx-blink{0%,100%{opacity:1}50%{opacity:.2}}
 .fx-year{font-variant-numeric:tabular-nums}
 .fx-hero-minimal{min-height:50vh!important}
 .fx-hero-minimal .fx-hero-inner{gap:1rem}
